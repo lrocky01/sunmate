@@ -31,25 +31,57 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. Configure Flutter (Disable Experimental SPM)
+      - name: 4. Configure Flutter & Precache iOS Engine
         run: |
           flutter config --no-enable-swift-package-manager
+          flutter precache --ios
           flutter --version
           xcodebuild -version
 
-      - name: 5. Install Flutter Dependencies & CocoaPods
+      - name: 5. Generate Flutter Config & Install CocoaPods
         run: |
           cd sunmate_app
           flutter pub get
+          FLUTTER_DIR=$(dirname $(dirname $(which flutter)))
+          echo "FLUTTER_DIR is $FLUTTER_DIR"
+
+          cat << EOF > ios/Flutter/Generated.xcconfig
+          FLUTTER_ROOT=$FLUTTER_DIR
+          FLUTTER_APPLICATION_PATH=$PWD
+          COCOAPODS_PARALLEL_CODE_SIGN=true
+          FLUTTER_TARGET=lib/main.dart
+          FLUTTER_BUILD_DIR=build
+          FLUTTER_BUILD_NAME=1.0.0
+          FLUTTER_BUILD_NUMBER=1
+          DART_OBFUSCATION=false
+          TRACK_WIDGET_CREATION=true
+          TREE_SHAKE_ICONS=false
+          PACKAGE_CONFIG=.dart_tool/package_config.json
+          EOF
+
+          cat << EOF > ios/Flutter/flutter_export_environment.sh
+          #!/bin/sh
+          export "FLUTTER_ROOT=$FLUTTER_DIR"
+          export "FLUTTER_APPLICATION_PATH=$PWD"
+          export "COCOAPODS_PARALLEL_CODE_SIGN=true"
+          export "FLUTTER_TARGET=lib/main.dart"
+          export "FLUTTER_BUILD_DIR=build"
+          export "FLUTTER_BUILD_NAME=1.0.0"
+          export "FLUTTER_BUILD_NUMBER=1"
+          export "DART_OBFUSCATION=false"
+          export "TRACK_WIDGET_CREATION=true"
+          export "TREE_SHAKE_ICONS=false"
+          export "PACKAGE_CONFIG=.dart_tool/package_config.json"
+          EOF
+          chmod +x ios/Flutter/flutter_export_environment.sh
+
           cd ios
           pod install --repo-update || pod install
           cd ..
 
       - name: 6. Build iOS Runner (Release Mode, No Code Sign via xcodebuild)
         run: |
-          cd sunmate_app
-          flutter build ios --config-only
-          cd ios
+          cd sunmate_app/ios
           xcodebuild -workspace Runner.xcworkspace \
                      -scheme Runner \
                      -configuration Release \
