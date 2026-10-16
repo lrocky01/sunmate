@@ -45,15 +45,28 @@ jobs:
           pod install --repo-update || pod install
           cd ..
 
-      - name: 6. Build iOS Runner (Release Mode, No Code Sign)
+      - name: 6. Build iOS Runner (Release Mode, No Code Sign via xcodebuild)
         run: |
           cd sunmate_app
-          flutter build ios --release --no-codesign
+          flutter build ios --config-only
+          cd ios
+          xcodebuild -workspace Runner.xcworkspace \
+                     -scheme Runner \
+                     -configuration Release \
+                     -sdk iphoneos \
+                     -derivedDataPath ../build \
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO \
+                     CODE_SIGN_IDENTITY="" \
+                     build
+          cd ../..
 
       - name: 7. Package Runner.app into SunMate.ipa
         run: |
           mkdir -p build_output/Payload
-          cp -r sunmate_app/build/ios/iphoneos/Runner.app build_output/Payload/
+          APP_DIR=$(find sunmate_app/build -name "Runner.app" -type d | head -n 1)
+          echo "Found Runner.app at: $APP_DIR"
+          cp -r "$APP_DIR" build_output/Payload/
           cd build_output
           zip -r -q ../SunMate.ipa Payload
           cd ..
