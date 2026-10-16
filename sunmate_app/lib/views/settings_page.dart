@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ai/asr_service.dart';
 import '../core/hardware/hardware_device_driver.dart';
@@ -203,6 +204,51 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         onPressed: _testHermesConnection,
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  // 一键复制 Hermes 自动安装指令引导卡
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.purple.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.purple.shade200),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: const [
+                            Icon(Icons.auto_awesome, color: Colors.purple, size: 18),
+                            SizedBox(width: 6),
+                            Text("不知道怎么配置 Hermes 端点？",
+                                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.purple)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          "点击复制以下指令，直接发给你的 Hermes 智能体对话框。它将自动安装 5 大专属技能并启动端点，向你汇报地址与密钥：",
+                          style: TextStyle(fontSize: 11, color: Colors.black87, height: 1.4),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.purple.shade800,
+                              side: BorderSide(color: Colors.purple.shade400),
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                            ),
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text("📋 一键复制 Hermes 自动接入指令",
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            onPressed: () => _copyHermesSetupPrompt(context),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 12),
                   // 一键双端诊断按钮
@@ -460,6 +506,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 32),
         ],
+      ),
+    );
+  }
+
+  void _copyHermesSetupPrompt(BuildContext context) {
+    const prompt = """请作为我的随身智能体，执行以下命令一键配置并启动 SunMate 专属随身第二大脑端点：
+curl -fsSL https://raw.githubusercontent.com/lrocky01/sunmate/main/sunmate-hermes/setup_hermes.sh | bash
+
+安装并启动完成后，请直接告诉我：
+1. 你的局域网/公网端点地址 (如 http://192.168.x.x:8080/v1)
+2. 安全访问 Token
+我将直接填入手机 SunMate App 设置页进行连接。""";
+
+    Clipboard.setData(const ClipboardData(text: prompt));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✓ 已复制 Hermes 接入指令！请在与 Hermes 的对话框或终端中粘贴发送。"),
+        backgroundColor: Colors.purple,
+        duration: Duration(seconds: 4),
       ),
     );
   }

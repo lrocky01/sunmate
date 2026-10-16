@@ -4,6 +4,7 @@ import '../providers/chat_provider.dart';
 import '../providers/device_provider.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/phone_mic_driver.dart';
+import '../core/hardware/ainote_6095_driver.dart';
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
@@ -151,8 +152,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     final activeDriver = factory.activeDriver;
                     if (activeDriver is PhoneMicDriver) {
                       activeDriver.triggerPressDown();
+                    } else if (activeDriver is AiNote6095Driver) {
+                      activeDriver.simulateButtonEvent(ButtonActionType.pressDown);
                     } else {
-                      // 触发通用按键按下
                       ref.read(chatProvider.notifier).setListeningState(true);
                     }
                   },
@@ -161,6 +163,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     final activeDriver = factory.activeDriver;
                     if (activeDriver is PhoneMicDriver) {
                       activeDriver.triggerRelease();
+                    } else if (activeDriver is AiNote6095Driver) {
+                      activeDriver.simulateButtonEvent(ButtonActionType.release);
                     } else {
                       ref.read(chatProvider.notifier).setListeningState(false);
                     }

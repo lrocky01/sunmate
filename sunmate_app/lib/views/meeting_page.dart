@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ai/asr_service.dart';
 import '../models/meeting_record.dart';
 import '../providers/server_config_provider.dart';
+import '../providers/device_provider.dart';
 
 class MeetingPage extends ConsumerStatefulWidget {
   const MeetingPage({super.key});
@@ -45,12 +46,19 @@ class _MeetingPageState extends ConsumerState<MeetingPage> {
 
     final asr = ref.read(asrServiceProvider);
     final agent = ref.read(agentClientProvider);
+    final factory = ref.read(deviceFactoryProvider);
 
     try {
-      // 1. 提交任务给本地 MOSS-ASR (POST /v1/jobs)
-      // 模拟 10 秒示例音频字节
-      final dummyAudioBytes = Uint8List(16000 * 2);
-      final jobId = await asr.submitJob(dummyAudioBytes, filename: "board_review.opus");
+      // 1. 检查录音卡最近是否有真实录音流产生
+      final realAudioBytes = factory.bleDriver.lastRecordedBytes;
+      final bool hasRealAudio = realAudioBytes != null && realAudioBytes.isNotEmpty;
+      final audioToSubmit = hasRealAudio ? realAudioBytes : Uint8List(16000 * 2);
+      final filename = hasRealAudio
+          ? "rec_${DateTime.now().millisecondsSinceEpoch}.opus"
+          : "board_review.opus";
+
+      // 提交任务给本地 MOSS-ASR (POST /v1/jobs)
+      final jobId = await asr.submitJob(audioToSubmit, filename: filename);
 
       List<DiarizedSegment> segments = [];
       String rawText = "";
@@ -64,7 +72,7 @@ class _MeetingPageState extends ConsumerState<MeetingPage> {
         }
       }
 
-      // 兜底示例分段
+      // 若为演示音频或本地 ASR 无返回时兜底呈现
       if (segments.isEmpty) {
         segments = [
           DiarizedSegment(speaker: "Speaker 0", start: 0.0, end: 12.5, text: "关于 SunMate 的全天时光机方案，我们建议采用两级时空切片聚类。"),
@@ -83,10 +91,12 @@ class _MeetingPageState extends ConsumerState<MeetingPage> {
 
       final newRecord = MeetingRecord(
         id: "m_${DateTime.now().millisecondsSinceEpoch}",
-        title: "SunMate 随身时光机与 MOSS-ASR 联调纪要",
+        title: hasRealAudio
+            ? "AiNote 现场录音纪要 (${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')})"
+            : "SunMate 随身时光机与 MOSS-ASR 联调纪要",
         createdAt: DateTime.now(),
-        durationSeconds: 900,
-        filePath: "/storage/rec_recent.opus",
+        durationSeconds: hasRealAudio ? (audioToSubmit.length ~/ 2000) : 900,
+        filePath: "/storage/$filename",
         isTranscribed: true,
         transcript: rawText,
         summary: summaryResult['summary'] ?? "会议纪要生成完毕",

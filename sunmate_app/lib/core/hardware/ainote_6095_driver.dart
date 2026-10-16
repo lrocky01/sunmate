@@ -31,6 +31,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool _isRecording = false;
   bool _isPaused = false;
   String _deviceName = "AiNote 6095";
+  Uint8List? _lastRecordedBytes;
+  Uint8List? get lastRecordedBytes => _lastRecordedBytes;
 
   // 按键多击判定
   int _clickCount = 0;
@@ -238,6 +240,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   @override
   Future<bool> stopRecording() async {
     if (!_isConnected) return false;
+    _lastRecordedBytes = _audioReceiver.stopAndExport();
     await _sendCommand(BleJsonRpc.stopRecord());
     _isRecording = false;
     _isPaused = false;
