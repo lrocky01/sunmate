@@ -272,6 +272,49 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     }
                   },
                 ),
+                if (currentDriverType == HardwareDeviceType.ainote6095Ble) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.bluetooth,
+                                color: device.isConnected ? Colors.green : Colors.grey, size: 20),
+                            const SizedBox(width: 8),
+                            Text(
+                              device.isConnected ? "已连接: ${device.deviceName}" : "蓝牙卡未连接",
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: device.isConnected ? Colors.green.shade700 : Colors.grey,
+                                fontWeight: device.isConnected ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                          ],
+                        ),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFFF8C00),
+                            side: const BorderSide(color: Color(0xFFFF8C00)),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          ),
+                          icon: const Icon(Icons.arrow_back, size: 14),
+                          label: const Text("前往首页连接", style: TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text("💡 切换至底部【首页】标签，点击顶部【🔍 搜索并连接 AiNote 蓝牙卡】即可开启扫描！"),
+                                duration: Duration(seconds: 4),
+                              ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

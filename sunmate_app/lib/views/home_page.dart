@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../core/ble/ble_constants.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
 
@@ -103,6 +105,56 @@ class HomePage extends ConsumerWidget {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 18),
+                    // 蓝牙硬件设备扫描与连接按钮
+                    if (!device.isConnected)
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFFF8C00),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.bluetooth_searching, size: 20),
+                          label: const Text("🔍 搜索并连接 AiNote 蓝牙卡",
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          onPressed: () => _showBleDevicePicker(context, ref),
+                        ),
+                      )
+                    else
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.red.shade700,
+                                side: BorderSide(color: Colors.red.shade300),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              icon: const Icon(Icons.bluetooth_disabled, size: 18),
+                              label: const Text("断开连接", style: TextStyle(fontSize: 13)),
+                              onPressed: () => devNotifier.disconnectDevice(),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFFF8C00),
+                                side: const BorderSide(color: Color(0xFFFF8C00)),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              icon: const Icon(Icons.sync, size: 18),
+                              label: const Text("重新配对", style: TextStyle(fontSize: 13)),
+                              onPressed: () => _showBleDevicePicker(context, ref),
+                            ),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -231,6 +283,235 @@ class _FeatureTile extends StatelessWidget {
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
         subtitle: Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.grey)),
         trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+      ),
+    );
+  }
+}
+
+/// 弹出蓝牙设备搜索与连接半屏弹窗
+void _showBleDevicePicker(BuildContext context, WidgetRef ref) {
+  showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (ctx) => const _BleDevicePickerModal(),
+  );
+}
+
+class _BleDevicePickerModal extends ConsumerStatefulWidget {
+  const _BleDevicePickerModal();
+
+  @override
+  ConsumerState<_BleDevicePickerModal> createState() => _BleDevicePickerModalState();
+}
+
+class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
+  bool _isConnecting = false;
+  String? _connectingDeviceId;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.read(deviceProvider.notifier).scanNearbyDevices();
+  }
+
+  @override
+  void dispose() {
+    ref.read(deviceProvider.notifier).stopScan();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final devNotifier = ref.read(deviceProvider.notifier);
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.72,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 12),
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("搜索蓝牙录音卡设备",
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    SizedBox(height: 2),
+                    Text("请确保 AiNote 6095 / 录音卡处于开机状态",
+                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.refresh),
+                  tooltip: "重新扫描",
+                  onPressed: () => devNotifier.scanNearbyDevices(),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: StreamBuilder<List<ScanResult>>(
+              stream: devNotifier.scanNearbyDevices(),
+              builder: (context, snapshot) {
+                final results = snapshot.data ?? [];
+                if (results.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.bluetooth_searching, size: 48, color: Colors.grey.shade400),
+                          const SizedBox(height: 12),
+                          const Text("正在搜索附近的蓝牙设备...",
+                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          const SizedBox(height: 8),
+                          const Text(
+                            "提示：\n1. 请确认硬件卡已开机；\n2. 若硬件已与其它手机连接，请长按按键使其进入配对广播状态；\n3. 请在 iPhone【设置 -> 蓝牙】确认蓝牙已打开。",
+                            textAlign: TextAlign.center,
+                            style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
+                          ),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFF8C00),
+                              foregroundColor: Colors.white,
+                            ),
+                            icon: const Icon(Icons.refresh),
+                            label: const Text("重新搜索"),
+                            onPressed: () => devNotifier.scanNearbyDevices(),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+
+                return ListView.separated(
+                  padding: const EdgeInsets.all(16),
+                  itemCount: results.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final item = results[index];
+                    final name = item.device.platformName.isNotEmpty
+                        ? item.device.platformName
+                        : (item.advertisementData.advName.isNotEmpty
+                            ? item.advertisementData.advName
+                            : "未知设备 (${item.device.remoteId.str.length > 8 ? item.device.remoteId.str.substring(0, 8) : item.device.remoteId.str})");
+
+                    final isTarget = BleConstants.targetDevicePrefixes
+                        .any((prefix) => name.toLowerCase().contains(prefix.toLowerCase()));
+
+                    final isThisConnecting = _isConnecting && _connectingDeviceId == item.device.remoteId.str;
+
+                    return ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      leading: CircleAvatar(
+                        backgroundColor: isTarget ? const Color(0xFFFFF3E0) : Colors.grey.shade100,
+                        child: Icon(
+                          Icons.bluetooth,
+                          color: isTarget ? const Color(0xFFFF8C00) : Colors.grey.shade600,
+                        ),
+                      ),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              name,
+                              style: TextStyle(
+                                fontWeight: isTarget ? FontWeight.bold : FontWeight.normal,
+                                color: isTarget ? const Color(0xFFE65100) : Colors.black87,
+                              ),
+                            ),
+                          ),
+                          if (isTarget)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFF8C00).withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text("匹配硬件",
+                                  style: TextStyle(fontSize: 10, color: Color(0xFFE65100), fontWeight: FontWeight.bold)),
+                            ),
+                        ],
+                      ),
+                      subtitle: Text("信号: ${item.rssi} dBm · ID: ${item.device.remoteId.str}",
+                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                      trailing: isThisConnecting
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8C00)),
+                            )
+                          : ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: isTarget ? const Color(0xFFFF8C00) : Colors.grey.shade200,
+                                foregroundColor: isTarget ? Colors.white : Colors.black87,
+                                elevation: isTarget ? 1 : 0,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              ),
+                              child: const Text("连接"),
+                              onPressed: _isConnecting
+                                  ? null
+                                  : () async {
+                                      setState(() {
+                                        _isConnecting = true;
+                                        _connectingDeviceId = item.device.remoteId.str;
+                                      });
+
+                                      final ok = await devNotifier.connectDevice(item.device);
+
+                                      if (mounted) {
+                                        setState(() {
+                                          _isConnecting = false;
+                                          _connectingDeviceId = null;
+                                        });
+
+                                        if (ok) {
+                                          Navigator.of(context).pop();
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            SnackBar(
+                                              content: Text("✓ 已成功连接到 $name！"),
+                                              backgroundColor: Colors.green.shade700,
+                                            ),
+                                          );
+                                        } else {
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                              content: Text("✗ 连接失败，请靠近设备重试"),
+                                              backgroundColor: Colors.red,
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    },
+                            ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

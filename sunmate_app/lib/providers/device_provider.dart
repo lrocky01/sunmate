@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
@@ -88,6 +89,30 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
 
   /// 刷新状态
   Future<void> refreshStatus() async {
+    _updateStateFromDriver(_factory.activeDriver);
+  }
+
+  /// 扫描附近蓝牙录音卡
+  Stream<List<ScanResult>> scanNearbyDevices() {
+    return _factory.bleDriver.scanNearbyDevices();
+  }
+
+  /// 停止蓝牙扫描
+  Future<void> stopScan() async {
+    await FlutterBluePlus.stopScan();
+  }
+
+  /// 连接指定的蓝牙外设
+  Future<bool> connectDevice(BluetoothDevice device) async {
+    await switchDriverType(HardwareDeviceType.ainote6095Ble);
+    final ok = await _factory.bleDriver.connectDevice(device);
+    _updateStateFromDriver(_factory.activeDriver);
+    return ok;
+  }
+
+  /// 断开当前设备连接
+  Future<void> disconnectDevice() async {
+    await _factory.activeDriver.disconnect();
     _updateStateFromDriver(_factory.activeDriver);
   }
 
