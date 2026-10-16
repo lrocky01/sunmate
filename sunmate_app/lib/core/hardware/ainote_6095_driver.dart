@@ -27,12 +27,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final _stateChangeController = StreamController<void>.broadcast();
 
   bool _isConnected = false;
-  int _batteryLevel = 85;
+  int _batteryLevel = 0;
   bool _isRecording = false;
   bool _isPaused = false;
-  String _deviceName = "AiNote 6095";
+  String _deviceName = "未连接设备";
   Uint8List? _lastRecordedBytes;
   Uint8List? get lastRecordedBytes => _lastRecordedBytes;
+  String? lastErrorMessage;
 
   // 按键多击判定
   int _clickCount = 0;
@@ -124,44 +125,100 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   /// 连接特定蓝牙外设并执行官方标准的 bindRequest 与 verifyIdentity 鉴权握手
   Future<bool> connectDevice(BluetoothDevice device, {bool isAutoReconnect = false}) async {
+    lastErrorMessage = null;
     try {
+      // 1. 核心关键防冲突：先停止正在运行的全局扫描，独占 iOS CoreBluetooth 通道
+      await FlutterBluePlus.stopScan();
+
+      // 2. 若此前曾连过该设备，先安全断开
+      try {
+        await device.disconnect();
+      } catch (_) {}
+
+      // 3. 发起 GATT 物理连接
       await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
       _connectedDevice = device;
-      _deviceName = device.platformName.isNotEmpty ? device.platformName : "AiNote 6095";
+      _deviceName = device.platformName.isNotEmpty ? device.platformName : "AiNote 录音卡";
 
+      // 4. iOS 关键时序：等待 300ms 让蓝牙底层 MTU 与连接间隔握手稳定
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      // 5. 发现所有 GATT 服务
       final services = await device.discoverServices();
+      
+      // 策略一：查找私有主服务 (匹配 1913)
+      BluetoothService? opusService;
       for (final service in services) {
-        if (service.uuid.toString().toLowerCase() == BleConstants.serviceOpus.toLowerCase()) {
-          for (final char in service.characteristics) {
-            final uuid = char.uuid.toString().toLowerCase();
-            if (uuid == BleConstants.charAppCmdWrite.toLowerCase()) {
-              _cmdChar = char;
-            } else if (uuid == BleConstants.charDeviceEvent.toLowerCase()) {
-              _eventChar = char;
-              await char.setNotifyValue(true);
-              char.onValueReceived.listen(_handleEventNotify);
-            } else if (uuid == BleConstants.charOpusAudioData.toLowerCase()) {
-              _audioChar = char;
-              await char.setNotifyValue(true);
-              char.onValueReceived.listen((raw) {
-                _audioReceiver.feedBlePacket(Uint8List.fromList(raw));
-              });
+        final cleanUuid = service.uuid.str.replaceAll("-", "").toLowerCase();
+        if (cleanUuid.contains("1913") || cleanUuid == "000102030405060708090a0b0c0d1913") {
+          opusService = service;
+          break;
+        }
+      }
+
+      // 策略二：若未严格匹配 1913，查找具备可写与通知特性的非系统通用私有服务 (兼容各种 CONE/OEM 固件)
+      if (opusService == null) {
+        for (final s in services) {
+          final isStandardGatt = s.uuid.str.toLowerCase().startsWith("000018");
+          if (!isStandardGatt) {
+            final hasWrite = s.characteristics.any((c) => c.properties.write || c.properties.writeWithoutResponse);
+            final hasNotify = s.characteristics.any((c) => c.properties.notify || c.properties.indicate);
+            if (hasWrite && hasNotify) {
+              opusService = s;
+              break;
             }
           }
         }
       }
 
-      // 执行对齐官方协议的绑定与认证握手链路:
-      // 1. 发送 bindRequest 绑定请求
-      await _sendCommand(BleJsonRpc.bindRequest());
-      // 2. 发送 verifyIdentity 认证请求
-      await _sendCommand(BleJsonRpc.verifyIdentity());
-      // 3. 同步硬件 RTC 时钟
-      await syncTime();
-      // 4. 查询硬件当前运行状态与电量
-      await _sendCommand(BleJsonRpc.getStatus());
+      if (opusService != null) {
+        for (final char in opusService.characteristics) {
+          final cleanUuid = char.uuid.str.replaceAll("-", "").toLowerCase();
+          if (cleanUuid.contains("2b15") || char.properties.write) {
+            _cmdChar = char;
+          } else if (cleanUuid.contains("2b30") || (char.properties.notify && _eventChar == null)) {
+            _eventChar = char;
+          } else if (cleanUuid.contains("2b31") || (char.properties.notify && _eventChar != null)) {
+            _audioChar = char;
+          }
+        }
+      }
 
-      // 5. 持久化记录设备 ID，实现下次启动无感秒连
+      // 6. 安全开启特征值 Notify 监听 (带微延迟防抖)
+      if (_eventChar != null) {
+        try {
+          await _eventChar!.setNotifyValue(true);
+          _eventChar!.onValueReceived.listen(_handleEventNotify);
+        } catch (e) {
+          print("开启事件通道监听提示: $e");
+        }
+      }
+
+      if (_audioChar != null) {
+        try {
+          await Future.delayed(const Duration(milliseconds: 150));
+          await _audioChar!.setNotifyValue(true);
+          _audioChar!.onValueReceived.listen((raw) {
+            _audioReceiver.feedBlePacket(Uint8List.fromList(raw));
+          });
+        } catch (e) {
+          print("开启音频流通道监听提示: $e");
+        }
+      }
+
+      // 7. 发送初始化握手与认证指令 (带异常容错)
+      try {
+        await _sendCommand(BleJsonRpc.bindRequest());
+        await Future.delayed(const Duration(milliseconds: 100));
+        await _sendCommand(BleJsonRpc.verifyIdentity());
+        await Future.delayed(const Duration(milliseconds: 100));
+        await syncTime();
+        await _sendCommand(BleJsonRpc.getStatus());
+      } catch (e) {
+        print("握手指令下发提示: $e");
+      }
+
+      // 8. 持久化记录设备 ID，实现下次启动无感秒连
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKeyLastDeviceId, device.remoteId.str);
       await prefs.setString(_prefKeyLastDeviceName, _deviceName);
@@ -170,6 +227,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _stateChangeController.add(null);
       return true;
     } catch (e) {
+      lastErrorMessage = e.toString();
+      print("连接蓝牙设备出现异常: $e");
       if (!isAutoReconnect) {
         _isConnected = false;
         _stateChangeController.add(null);

@@ -32,8 +32,9 @@ class BleConstants {
   static const int eventAncsNotification = 0x20;
   static const int eventAncsConfigResponse = 0x21;
 
-  // 广播过滤关键字
+  // 广播过滤关键字 (包含用户提到的 CONE 批次)
   static const List<String> targetDevicePrefixes = [
+    "CONE",
     "AiNote",
     "ATW6095",
     "6095",

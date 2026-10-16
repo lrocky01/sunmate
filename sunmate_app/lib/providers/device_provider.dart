@@ -102,8 +102,12 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
     await FlutterBluePlus.stopScan();
   }
 
+  /// 获取最近一次连接失败的真实错误详情
+  String? get lastError => _factory.bleDriver.lastErrorMessage;
+
   /// 连接指定的蓝牙外设
   Future<bool> connectDevice(BluetoothDevice device) async {
+    await stopScan(); // 关键：连接前彻底停止扫描
     await switchDriverType(HardwareDeviceType.ainote6095Ble);
     final ok = await _factory.bleDriver.connectDevice(device);
     _updateStateFromDriver(_factory.activeDriver);

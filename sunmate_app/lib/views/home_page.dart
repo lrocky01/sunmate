@@ -57,7 +57,7 @@ class HomePage extends ConsumerWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                device.deviceName,
+                                device.isConnected ? device.deviceName : "未连接随身设备",
                                 style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                               ),
                               const SizedBox(height: 4),
@@ -84,16 +84,22 @@ class HomePage extends ConsumerWidget {
                         _StatusIndicator(
                           icon: Icons.battery_charging_full,
                           label: "电量",
-                          value: "${device.batteryLevel}%",
-                          color: device.batteryLevel > 20 ? Colors.green : Colors.red,
+                          value: device.isConnected ? "${device.batteryLevel}%" : "--",
+                          color: device.isConnected
+                              ? (device.batteryLevel > 20 ? Colors.green : Colors.red)
+                              : Colors.grey,
                         ),
                         _StatusIndicator(
                           icon: Icons.fiber_manual_record,
                           label: "状态",
-                          value: device.isRecording
-                              ? "采集中"
-                              : (device.isPaused ? "已暂停" : "待命"),
-                          color: device.isRecording ? Colors.red : Colors.grey.shade700,
+                          value: device.isConnected
+                              ? (device.isRecording
+                                  ? "采集中"
+                                  : (device.isPaused ? "已暂停" : "待命"))
+                              : "未连接",
+                          color: device.isConnected
+                              ? (device.isRecording ? Colors.red : Colors.green.shade700)
+                              : Colors.grey,
                         ),
                         _StatusIndicator(
                           icon: Icons.graphic_eq,
@@ -414,8 +420,17 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             child: StreamBuilder<List<ScanResult>>(
               stream: devNotifier.scanNearbyDevices(),
               builder: (context, snapshot) {
-                final results = snapshot.data ?? [];
-                if (results.isEmpty) {
+                final allResults = snapshot.data ?? [];
+
+                // 1. 过滤掉所有无名字的匿名垃圾广播 (对齐系统蓝牙体验，消除几十个未知设备的杂音)
+                final validResults = allResults.where((item) {
+                  final n = item.device.platformName.isNotEmpty
+                      ? item.device.platformName
+                      : item.advertisementData.advName;
+                  return n.trim().isNotEmpty;
+                }).toList();
+
+                if (validResults.isEmpty) {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
@@ -428,7 +443,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                               style: TextStyle(fontWeight: FontWeight.bold)),
                           const SizedBox(height: 8),
                           const Text(
-                            "提示：\n1. 请确认硬件卡已开机；\n2. 若硬件已与其它手机连接，请长按按键使其进入配对广播状态；\n3. 请在 iPhone【设置 -> 蓝牙】确认蓝牙已打开。",
+                            "提示：\n1. 请确认录音卡已开机；\n2. 若设备广播名包含 CONE 或 AiNote，请靠近手机；\n3. 若硬件已与其它手机连接，请长按按键使其进入广播配对状态。",
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
                           ),
@@ -448,20 +463,33 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                   );
                 }
 
+                // 2. 智能排序：推荐录音卡置顶 (支持 CONE、AiNote、6095 等或带 1913 服务)，其余按信号由强到弱排序
+                validResults.sort((a, b) {
+                  final nameA = (a.device.platformName.isNotEmpty ? a.device.platformName : a.advertisementData.advName).toLowerCase();
+                  final nameB = (b.device.platformName.isNotEmpty ? b.device.platformName : b.advertisementData.advName).toLowerCase();
+
+                  final isTargetA = BleConstants.targetDevicePrefixes.any((p) => nameA.contains(p.toLowerCase())) ||
+                      a.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
+                  final isTargetB = BleConstants.targetDevicePrefixes.any((p) => nameB.contains(p.toLowerCase())) ||
+                      b.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
+
+                  if (isTargetA && !isTargetB) return -1;
+                  if (!isTargetA && isTargetB) return 1;
+                  return b.rssi.compareTo(a.rssi); // 信号强的排前面
+                });
+
                 return ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: results.length,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  itemCount: validResults.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (context, index) {
-                    final item = results[index];
+                    final item = validResults[index];
                     final name = item.device.platformName.isNotEmpty
                         ? item.device.platformName
-                        : (item.advertisementData.advName.isNotEmpty
-                            ? item.advertisementData.advName
-                            : "未知设备 (${item.device.remoteId.str.length > 8 ? item.device.remoteId.str.substring(0, 8) : item.device.remoteId.str})");
+                        : item.advertisementData.advName;
 
-                    final isTarget = BleConstants.targetDevicePrefixes
-                        .any((prefix) => name.toLowerCase().contains(prefix.toLowerCase()));
+                    final isTarget = BleConstants.targetDevicePrefixes.any((prefix) => name.toLowerCase().contains(prefix.toLowerCase())) ||
+                        item.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
 
                     final isThisConnecting = _isConnecting && _connectingDeviceId == item.device.remoteId.str;
 
@@ -492,7 +520,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                 color: const Color(0xFFFF8C00).withOpacity(0.12),
                                 borderRadius: BorderRadius.circular(4),
                               ),
-                              child: const Text("匹配硬件",
+                              child: const Text("推荐录音卡",
                                   style: TextStyle(fontSize: 10, color: Color(0xFFE65100), fontWeight: FontWeight.bold)),
                             ),
                         ],
@@ -501,9 +529,12 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                           style: const TextStyle(fontSize: 11, color: Colors.grey)),
                       trailing: isThisConnecting
                           ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8C00)),
+                              width: 28,
+                              height: 28,
+                              child: Padding(
+                                padding: EdgeInsets.all(4),
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8C00)),
+                              ),
                             )
                           : ElevatedButton(
                               style: ElevatedButton.styleFrom(
@@ -539,10 +570,12 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                             ),
                                           );
                                         } else {
+                                          final err = devNotifier.lastError ?? "连接握手超时";
                                           ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(
-                                              content: Text("✗ 连接失败，请靠近设备重试"),
-                                              backgroundColor: Colors.red,
+                                            SnackBar(
+                                              content: Text("✗ 连接未完成: $err\n请靠近录音卡或长按按键重新进入配对模式"),
+                                              backgroundColor: Colors.red.shade800,
+                                              duration: const Duration(seconds: 5),
                                             ),
                                           );
                                         }
