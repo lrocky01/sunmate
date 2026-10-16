@@ -31,15 +31,19 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 4. Verify Flutter & Environment
+      - name: 4. Configure Flutter (Disable Experimental SPM)
         run: |
+          flutter config --no-enable-swift-package-manager
           flutter --version
           xcodebuild -version
 
-      - name: 5. Install Flutter Dependencies
+      - name: 5. Install Flutter Dependencies & CocoaPods
         run: |
           cd sunmate_app
           flutter pub get
+          cd ios
+          pod install --repo-update || pod install
+          cd ..
 
       - name: 6. Build iOS Runner (Release Mode, No Code Sign)
         run: |
