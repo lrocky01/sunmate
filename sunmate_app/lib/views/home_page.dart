@@ -120,12 +120,26 @@ class HomePage extends ConsumerWidget {
                           icon: const Icon(Icons.bluetooth_searching, size: 20),
                           label: const Text("🔍 搜索并连接 AiNote 蓝牙卡",
                               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          onPressed: () => _showBleDevicePicker(context, ref),
+                          onPressed: () => showBleDevicePickerModal(context, ref),
                         ),
                       )
-                    else
+                    else ...[
                       Row(
                         children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.grey.shade700,
+                                side: BorderSide(color: Colors.grey.shade400),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              ),
+                              icon: const Icon(Icons.bluetooth_disabled, size: 18),
+                              label: const Text("断开", style: TextStyle(fontSize: 13)),
+                              onPressed: () => devNotifier.disconnectDevice(),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
                           Expanded(
                             child: OutlinedButton.icon(
                               style: OutlinedButton.styleFrom(
@@ -134,27 +148,35 @@ class HomePage extends ConsumerWidget {
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
-                              icon: const Icon(Icons.bluetooth_disabled, size: 18),
-                              label: const Text("断开连接", style: TextStyle(fontSize: 13)),
-                              onPressed: () => devNotifier.disconnectDevice(),
+                              icon: const Icon(Icons.link_off, size: 18),
+                              label: const Text("解绑设备", style: TextStyle(fontSize: 13)),
+                              onPressed: () async {
+                                await devNotifier.unpairDevice();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text("已清除设备绑定记录")),
+                                  );
+                                }
+                              },
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 8),
                           Expanded(
-                            child: OutlinedButton.icon(
-                              style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFFFF8C00),
-                                side: const BorderSide(color: Color(0xFFFF8C00)),
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFF8C00),
+                                foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               icon: const Icon(Icons.sync, size: 18),
                               label: const Text("重新配对", style: TextStyle(fontSize: 13)),
-                              onPressed: () => _showBleDevicePicker(context, ref),
+                              onPressed: () => showBleDevicePickerModal(context, ref),
                             ),
                           ),
                         ],
                       ),
+                    ],
                   ],
                 ),
               ),
@@ -289,7 +311,7 @@ class _FeatureTile extends StatelessWidget {
 }
 
 /// 弹出蓝牙设备搜索与连接半屏弹窗
-void _showBleDevicePicker(BuildContext context, WidgetRef ref) {
+void showBleDevicePickerModal(BuildContext context, WidgetRef ref) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -361,6 +383,28 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                   icon: const Icon(Icons.refresh),
                   tooltip: "重新扫描",
                   onPressed: () => devNotifier.scanNearbyDevices(),
+                ),
+              ],
+            ),
+          ),
+          // iOS 系统配对重要提示横幅
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFFD54F)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.info_outline, size: 18, color: Color(0xFFE65100)),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "重要提示：点击连接后，iOS 系统可能会弹出【想要与您的 iPhone 配对】，请务必点击【配对】以开启按键控制与通知推送。",
+                    style: TextStyle(fontSize: 11, color: Color(0xFFE65100), height: 1.3),
+                  ),
                 ),
               ],
             ),

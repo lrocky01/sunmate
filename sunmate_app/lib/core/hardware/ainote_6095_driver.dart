@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../ble/ble_constants.dart';
 import '../ble/ble_json_rpc.dart';
 import '../audio/opus_stream_receiver.dart';
@@ -11,6 +12,9 @@ import 'hardware_device_driver.dart';
 
 /// AiNote 6095 (Telink 芯片方案) 蓝牙硬件录音卡驱动
 class AiNote6095Driver implements HardwareDeviceDriver {
+  static const String _prefKeyLastDeviceId = "sunmate_last_ble_device_id";
+  static const String _prefKeyLastDeviceName = "sunmate_last_ble_device_name";
+
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _cmdChar;
   BluetoothCharacteristic? _eventChar;
@@ -58,6 +62,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         ),
       );
     });
+
+    // 启动时自动尝试静默重连上次绑定的设备 (对齐官方 BleScanReconnectController)
+    autoReconnectLastDevice();
   }
 
   @override
@@ -89,14 +96,34 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   /// 扫描附近 6095 录音卡
   Stream<List<ScanResult>> scanNearbyDevices() {
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 12));
     return FlutterBluePlus.scanResults;
   }
 
-  /// 连接特定蓝牙外设
-  Future<bool> connectDevice(BluetoothDevice device) async {
+  /// 自动尝试重连上次配对绑定的设备
+  Future<bool> autoReconnectLastDevice() async {
     try {
-      await device.connect(autoConnect: false);
+      final prefs = await SharedPreferences.getInstance();
+      final lastId = prefs.getString(_prefKeyLastDeviceId);
+      if (lastId == null || lastId.isEmpty) return false;
+
+      final savedName = prefs.getString(_prefKeyLastDeviceName);
+      if (savedName != null && savedName.isNotEmpty) {
+        _deviceName = savedName;
+      }
+
+      // 快速通过已存 remoteId 构造设备并重连
+      final device = BluetoothDevice.fromId(lastId);
+      return await connectDevice(device, isAutoReconnect: true);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 连接特定蓝牙外设并执行官方标准的 bindRequest 与 verifyIdentity 鉴权握手
+  Future<bool> connectDevice(BluetoothDevice device, {bool isAutoReconnect = false}) async {
+    try {
+      await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
       _connectedDevice = device;
       _deviceName = device.platformName.isNotEmpty ? device.platformName : "AiNote 6095";
 
@@ -122,29 +149,39 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         }
       }
 
+      // 执行对齐官方协议的绑定与认证握手链路:
+      // 1. 发送 bindRequest 绑定请求
+      await _sendCommand(BleJsonRpc.bindRequest());
+      // 2. 发送 verifyIdentity 认证请求
+      await _sendCommand(BleJsonRpc.verifyIdentity());
+      // 3. 同步硬件 RTC 时钟
+      await syncTime();
+      // 4. 查询硬件当前运行状态与电量
+      await _sendCommand(BleJsonRpc.getStatus());
+
+      // 5. 持久化记录设备 ID，实现下次启动无感秒连
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_prefKeyLastDeviceId, device.remoteId.str);
+      await prefs.setString(_prefKeyLastDeviceName, _deviceName);
+
       _isConnected = true;
       _stateChangeController.add(null);
-
-      // 同步时钟与查询硬件状态
-      await syncTime();
-      await _sendCommand(BleJsonRpc.getStatus());
       return true;
     } catch (e) {
-      _isConnected = false;
-      _stateChangeController.add(null);
+      if (!isAutoReconnect) {
+        _isConnected = false;
+        _stateChangeController.add(null);
+      }
       return false;
     }
   }
 
   @override
   Future<bool> connect() async {
-    // 默认自动扫描并连接首个匹配设备，若已有设备则连接
     if (_connectedDevice != null) {
       return connectDevice(_connectedDevice!);
     }
-    _isConnected = true; // 占位连接状态
-    _stateChangeController.add(null);
-    return true;
+    return await autoReconnectLastDevice();
   }
 
   @override
@@ -157,6 +194,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _isRecording = false;
     _isPaused = false;
     _stateChangeController.add(null);
+  }
+
+  /// 解除当前设备绑定，清除本地持久化缓存
+  Future<void> unpairDevice() async {
+    await disconnect();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefKeyLastDeviceId);
+    await prefs.remove(_prefKeyLastDeviceName);
   }
 
   @override
@@ -267,6 +312,16 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     // 硬件 ANCS 系统通知透传
     else if (eventId == BleConstants.eventAncsNotification && bytes.length > 2) {
       _handleAncsPayload(bytes.sublist(1));
+    }
+
+    // 检查是否为 JSON-RPC 事件或主动身份验证请求 (例如 verifyIdentityRequest)
+    if (bytes.length > 4) {
+      try {
+        final text = utf8.decode(bytes, allowMalformed: true);
+        if (text.contains("verifyIdentityRequest")) {
+          _sendCommand(BleJsonRpc.verifyIdentity());
+        }
+      } catch (_) {}
     }
   }
 

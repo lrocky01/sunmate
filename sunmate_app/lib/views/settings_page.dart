@@ -6,6 +6,7 @@ import '../models/button_action_config.dart';
 import '../providers/button_action_provider.dart';
 import '../providers/device_provider.dart';
 import '../providers/server_config_provider.dart';
+import 'home_page.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -294,22 +295,36 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             ),
                           ],
                         ),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFFF8C00),
-                            side: const BorderSide(color: Color(0xFFFF8C00)),
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          ),
-                          icon: const Icon(Icons.arrow_back, size: 14),
-                          label: const Text("前往首页连接", style: TextStyle(fontSize: 12)),
-                          onPressed: () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text("💡 切换至底部【首页】标签，点击顶部【🔍 搜索并连接 AiNote 蓝牙卡】即可开启扫描！"),
-                                duration: Duration(seconds: 4),
+                        Row(
+                          children: [
+                            if (device.isConnected) ...[
+                              TextButton.icon(
+                                style: TextButton.styleFrom(foregroundColor: Colors.red.shade700),
+                                icon: const Icon(Icons.link_off, size: 14),
+                                label: const Text("解绑", style: TextStyle(fontSize: 12)),
+                                onPressed: () async {
+                                  await devNotifier.unpairDevice();
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(content: Text("已清除设备绑定记录")),
+                                    );
+                                  }
+                                },
                               ),
-                            );
-                          },
+                              const SizedBox(width: 4),
+                            ],
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFF8C00),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              ),
+                              icon: const Icon(Icons.bluetooth_searching, size: 14),
+                              label: Text(device.isConnected ? "重新配对" : "搜索连接",
+                                  style: const TextStyle(fontSize: 12)),
+                              onPressed: () => showBleDevicePickerModal(context, ref),
+                            ),
+                          ],
                         ),
                       ],
                     ),

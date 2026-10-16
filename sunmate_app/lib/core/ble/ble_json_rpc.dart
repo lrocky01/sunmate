@@ -81,4 +81,33 @@ class BleJsonRpc {
       if (appFilter != null) "apps": appFilter,
     });
   }
+
+  // 11. 设备首次配对绑定请求 (对齐官方 bindRequest)
+  // confirm_code: 6位配对码
+  // sign: 8位十六进制校验签名
+  // user_id: 19位本地用户唯一ID
+  static Uint8List bindRequest({
+    String confirmCode = "123456",
+    String sign = "a1b2c3d4",
+    String userId = "1000000000000000001",
+  }) {
+    return buildRequest(0x0003, "bindRequest", {
+      "confirm_code": confirmCode,
+      "sign": sign,
+      "user_id": userId,
+      "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+    });
+  }
+
+  // 12. 设备二次连接身份认证 (对齐官方 verifyIdentity)
+  static Uint8List verifyIdentity({
+    String token = "sunmate_auth",
+    String? sharedSecret,
+  }) {
+    return buildRequest(0x0004, "verifyIdentity", {
+      "token": token,
+      "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      if (sharedSecret != null) "shared_secret": sharedSecret,
+    });
+  }
 }

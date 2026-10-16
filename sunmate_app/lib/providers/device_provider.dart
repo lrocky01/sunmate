@@ -116,6 +116,19 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
     _updateStateFromDriver(_factory.activeDriver);
   }
 
+  /// 解除当前设备绑定 (清除已保存的设备信息)
+  Future<void> unpairDevice() async {
+    await _factory.bleDriver.unpairDevice();
+    _updateStateFromDriver(_factory.activeDriver);
+  }
+
+  /// 尝试自动重连上次保存的录音卡
+  Future<bool> autoReconnect() async {
+    final ok = await _factory.bleDriver.autoReconnectLastDevice();
+    _updateStateFromDriver(_factory.activeDriver);
+    return ok;
+  }
+
   @override
   void dispose() {
     _stateSub?.cancel();
