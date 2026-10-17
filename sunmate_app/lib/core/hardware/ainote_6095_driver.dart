@@ -328,6 +328,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
         _logProgress("✓ 5.3 硬件指示灯已置为连接就绪常亮");
+
+        // 5.5 启用 iOS ANCS 系统通知服务 (触发 iOS 弹出【蓝牙配对请求】与【允许接收通知】)
+        await Future.delayed(const Duration(milliseconds: 150));
+        await sendAncsConfig(enable: true, mode: 3);
+        _logProgress("✓ 5.4 已下发 ANCS 系统通知中心配置 (触发 iOS 系统配对与通知授权)");
       } catch (e) {
         print("握手指令序列下发提示: $e");
       }
