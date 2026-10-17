@@ -119,7 +119,7 @@ abstract class HardwareDeviceDriver {
   /// 时间戳对齐与时钟同步
   Future<bool> syncTime();
 
-  /// 配置 iOS ANCS 系统通知透传模式 (enable: 是否启用, mode: 3=上传且闪灯)
+  /// 保存 iOS ANCS 连接请求偏好；系统授权状态由 iOS 单独管理。
   Future<bool> sendAncsConfig({required bool enable, int mode = 3});
 
   /// 资源释放

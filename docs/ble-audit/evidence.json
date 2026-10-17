@@ -1,0 +1,59 @@
+{
+  "apk_sha256": "e638958d143b518829a3db4d16cb4f8db1b19c64d49149458b98684c16e2137f",
+  "input_path": "/Users/m/Documents/VS/sunmate/YoooClaw 2.3.0.apk",
+  "scope": "static reconstructed analysis copies; no APK execution",
+  "segments": [
+    {
+      "source_offset": "0xe344",
+      "size": 12723729,
+      "map_offset": "0xb9f29c",
+      "class_count": 9687,
+      "string_count": 74988,
+      "rebuilt_string_indices": [
+        0,
+        995
+      ],
+      "bytes_from_4096_unchanged": true,
+      "original_segment_sha256": "7c51cb2a51b701daaff09549de70e3c7c2b626d19a79d15c649e6a84eb1d6de5",
+      "reconstructed_sha256": "1fd5508f6e8fbcaf95aa7756c9430fb6c604e3264d1db907ba538a3a64676109",
+      "output": "recovered-1.dex"
+    },
+    {
+      "source_offset": "0xc30958",
+      "size": 11866191,
+      "map_offset": "0xad1324",
+      "class_count": 11078,
+      "string_count": 85645,
+      "rebuilt_string_indices": [
+        0,
+        995
+      ],
+      "bytes_from_4096_unchanged": true,
+      "original_segment_sha256": "1b983bc748b5c433cb321de6dd9c4d6a101e3724e40bbe08e327238efef2cefc",
+      "reconstructed_sha256": "1bf0cc48f3306c06430634e07c99d253568bfb730e440875c04687a05de79b8b",
+      "output": "recovered-2.dex"
+    },
+    {
+      "source_offset": "0x17819a8",
+      "size": 6405980,
+      "map_offset": "0x61be80",
+      "class_count": 7198,
+      "string_count": 43049,
+      "rebuilt_string_indices": [
+        0,
+        995
+      ],
+      "bytes_from_4096_unchanged": true,
+      "original_segment_sha256": "f187dabf799532905bf748955119337fc16cd1f63790da72c95203295b2faffd",
+      "reconstructed_sha256": "0936ef3abeeab285cbae2dbcf2bf3eb9cfede7e63cb4054525c2f68ac83098af",
+      "output": "recovered-3.dex"
+    }
+  ],
+  "rea_original_apk_evidence_id": "ev_e95a33ec23755b00aed266717101bfafb16d7f524444b5098afe1fadd121f872",
+  "rea_reconstructed_method_evidence_id": "ev_619c6d5db9ba3b676c7fca764507414eaf4ab06bb7b5cfb2f8ac8da8f79efebc",
+  "limitations": [
+    "Static evidence only; no iPhone or peripheral execution.",
+    "Reconstructed DEX headers are analyst generated.",
+    "JADX emitted errors in unrelated or complex methods; partial handler control flow is not authoritative."
+  ]
+}

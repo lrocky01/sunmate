@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
@@ -22,7 +23,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.10 (纯净JSON协议·彻底消除断连版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.11+12 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -65,7 +66,7 @@ class HomePage extends ConsumerWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                device.isConnected ? device.deviceName : "未连接随身设备",
+                                device.isConnected || devNotifier.isBleLinkConnected ? device.deviceName : "未连接随身设备",
                                 style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                               ),
                               if (device.snNumber.isNotEmpty && device.snNumber != "--") ...[
@@ -85,8 +86,8 @@ class HomePage extends ConsumerWidget {
                                 device.isConnected
                                     ? (activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
                                         ? "原生麦克风就绪 (无外设模式)"
-                                        : "蓝牙卡连接正常 (GATT 直连已就绪)")
-                                    : "设备待连接 (可一键切换为手机麦克风)",
+                                        : devNotifier.connectionSummary)
+                                    : devNotifier.connectionSummary,
                                 style: TextStyle(
                                   color: device.isConnected ? Colors.green.shade700 : Colors.grey,
                                   fontSize: 12,
@@ -96,6 +97,14 @@ class HomePage extends ConsumerWidget {
                           ),
                         ),
                       ],
+                    ),
+                    TextButton.icon(
+                      icon: const Icon(Icons.receipt_long, size: 18),
+                      label: const Text('蓝牙状态与诊断日志'),
+                      onPressed: () => showModalBottomSheet<void>(
+                        context: context, isScrollControlled: true,
+                        builder: (_) => const BleDiagnosticsSheet(),
+                      ),
                     ),
                     const Divider(height: 32),
                     Row(
@@ -137,7 +146,7 @@ class HomePage extends ConsumerWidget {
                     ),
                     const SizedBox(height: 18),
                     // 蓝牙硬件设备扫描与连接按钮
-                    if (!device.isConnected)
+                    if (!device.isConnected && !devNotifier.isBleLinkConnected && !devNotifier.isBleConnecting)
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(
@@ -166,7 +175,8 @@ class HomePage extends ConsumerWidget {
                               ),
                               icon: const Icon(Icons.bluetooth_disabled, size: 18),
                               label: const Text("断开", style: TextStyle(fontSize: 13)),
-                              onPressed: () => devNotifier.disconnectDevice(),
+                              onPressed: () => activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
+                                  ? devNotifier.disconnectDevice() : devNotifier.cancelBleConnection(),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -179,7 +189,7 @@ class HomePage extends ConsumerWidget {
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               icon: const Icon(Icons.link_off, size: 18),
-                              label: const Text("解绑设备", style: TextStyle(fontSize: 13)),
+                              label: const Text("清除记录", style: TextStyle(fontSize: 13)),
                               onPressed: () async {
                                 await devNotifier.unpairDevice();
                                 if (context.mounted) {
@@ -200,7 +210,7 @@ class HomePage extends ConsumerWidget {
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
                               icon: const Icon(Icons.sync, size: 18),
-                              label: const Text("重新配对", style: TextStyle(fontSize: 13)),
+                              label: const Text("查看连接", style: TextStyle(fontSize: 13)),
                               onPressed: () => showBleDevicePickerModal(context, ref),
                             ),
                           ),
@@ -363,6 +373,48 @@ class _FeatureTile extends StatelessWidget {
   }
 }
 
+/// 断开后和下次启动仍可查看最近一次连接记录。
+class BleDiagnosticsSheet extends ConsumerWidget {
+  const BleDiagnosticsSheet({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(deviceProvider);
+    final notifier = ref.read(deviceProvider.notifier);
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.8,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Expanded(child: Text('蓝牙诊断 · 1.0.11+12', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                IconButton(
+                  tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: notifier.diagnosticText));
+                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('诊断日志已复制')));
+                  },
+                ),
+              ]),
+              Text(notifier.connectionSummary),
+              const SizedBox(height: 8),
+              const Text('日志包含设备标识、GATT 与系统错误，不包含密钥或通知正文。', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              const Divider(),
+              Expanded(child: SingleChildScrollView(child: SelectableText(notifier.diagnosticText, style: const TextStyle(fontFamily: 'monospace', fontSize: 11)))),
+              if (notifier.isBleLinkConnected || notifier.isBleConnecting)
+                TextButton(onPressed: notifier.cancelBleConnection, child: const Text('取消并断开蓝牙连接')),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 弹出蓝牙设备搜索与连接半屏弹窗
 void showBleDevicePickerModal(BuildContext context, WidgetRef ref) {
   showModalBottomSheet(
@@ -382,7 +434,6 @@ class _BleDevicePickerModal extends ConsumerStatefulWidget {
 
 class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   bool _isConnecting = false;
-  String? _connectingDeviceId;
   String? _connectingDeviceName;
   String? _connectionError;
   StreamSubscription<String>? _logSub;
@@ -474,7 +525,9 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                     IconButton(
                       icon: const Icon(Icons.close),
                       tooltip: "关闭弹窗",
-                      onPressed: () {
+                      onPressed: () async {
+                        if (_isConnecting) await devNotifier.cancelBleConnection();
+                        if (!mounted) return;
                         setState(() {
                           _isConnecting = false;
                         });
@@ -518,16 +571,14 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                   ),
                   if (devNotifier.connectionLogs.isNotEmpty) ...[
                     const Divider(height: 12),
-                    const Text("底层诊断日志：", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black54)),
-                    const SizedBox(height: 4),
-                    ...devNotifier.connectionLogs.map((log) => Text(
-                          log,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontFamily: 'monospace',
-                            color: log.startsWith("✓") ? Colors.green.shade800 : (log.startsWith("✗") ? Colors.red.shade800 : Colors.black87),
-                          ),
-                        )),
+                    TextButton.icon(
+                      icon: const Icon(Icons.receipt_long, size: 16),
+                      label: const Text('查看并复制完整诊断日志'),
+                      onPressed: () => showModalBottomSheet<void>(
+                        context: context, isScrollControlled: true,
+                        builder: (_) => const BleDiagnosticsSheet(),
+                      ),
+                    ),
                   ],
                 ],
               ),
@@ -558,7 +609,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  "1. 务必在官方 App 页面底部点击【解绑设备】，或长按卡上实体键 10 秒恢复出厂设置（清除官方私有密钥独占锁定），否则芯片固件会在数秒后主动断连！\n2. C·ONE 采用 BLE GATT 应用层直连，无需在 iPhone 系统设置蓝牙列表配对即可全功能使用。",
+                  "连接时请处理 iOS 的配对及通知授权。已有系统配对时可能不会重复弹窗。\n若显示业务待鉴权，请复制诊断日志；不要仅因断开就恢复出厂或清除官方绑定。",
                   style: TextStyle(fontSize: 11, color: Color(0xFF5D4037), height: 1.4),
                 ),
               ],
@@ -576,7 +627,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           // 若日志中已经出现成功握手，显示大号绿勾，否则显示转圈
-                          devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))
+                          ref.watch(deviceProvider).isConnected
                               ? const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 52)
                               : const SizedBox(
                                   width: 44,
@@ -588,9 +639,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                 ),
                           const SizedBox(height: 14),
                           Text(
-                            devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))
-                                ? "✓ ${_connectingDeviceName ?? '录音卡'} 连接就绪！"
-                                : "正在连接 ${_connectingDeviceName ?? '录音卡'}...",
+                            '${_connectingDeviceName ?? "录音卡"}：${devNotifier.connectionSummary}',
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 12),
@@ -631,7 +680,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                           ),
                           const SizedBox(height: 16),
                           // 操作按钮组：完成进入主界面 或 取消连接
-                          if (devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))) ...[
+                          if (ref.watch(deviceProvider).isConnected) ...[
                             SizedBox(
                               width: double.infinity,
                               height: 44,
@@ -656,10 +705,11 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                               icon: const Icon(Icons.cancel_outlined, size: 18),
                               label: const Text("取消连接并返回"),
                               style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
-                              onPressed: () {
+                              onPressed: () async {
+                                await devNotifier.cancelBleConnection();
+                                if (!mounted) return;
                                 setState(() {
                                   _isConnecting = false;
-                                  _connectingDeviceId = null;
                                 });
                               },
                             ),
@@ -789,7 +839,6 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
 
                                 setState(() {
                                   _isConnecting = true;
-                                  _connectingDeviceId = item.device.remoteId.str;
                                   _connectingDeviceName = name;
                                   _connectionError = null;
                                 });
@@ -807,7 +856,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                       Navigator.of(context).maybePop();
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
-                                          content: Text("✓ 已成功连接到 $name！指示灯常亮就绪"),
+                                          content: Text("$name：设备业务已验证"),
                                           backgroundColor: Colors.green.shade700,
                                         ),
                                       );
@@ -816,7 +865,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                     final err = devNotifier.lastError ?? "连接握手超时";
                                     setState(() {
                                       _isConnecting = false;
-                                      _connectionError = "连接未完成: $err\n⚠️ 重点排查：若设备显示连接后数秒内断开，说明录音卡芯片处于官方私有密钥独占锁定状态。请在官方 App 底部点击【解绑设备】，或长按录音卡正面按键 10 秒彻底恢复出厂设置（清除私有绑定）后再试。";
+                                      _connectionError = '${devNotifier.connectionSummary}\n$err';
                                     });
                                   }
                                 }

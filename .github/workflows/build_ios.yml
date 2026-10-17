@@ -29,6 +29,7 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+          flutter-version: '3.35.7'
           cache: true
 
       - name: 4. Configure Flutter & Precache iOS Engine
@@ -42,6 +43,8 @@ jobs:
         run: |
           cd sunmate_app
           flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
 
           # 兼容 Xcode 15.4 / Swift 编译器：清理 Pigeon 生成代码中的末尾逗号语法冲突
           find "$HOME/.pub-cache" -name "messages.g.swift" -exec sed -i '' -e 's/,[[:space:]]*)$/)/g' {} + || true
@@ -50,7 +53,7 @@ jobs:
           echo "FLUTTER_DIR is $FLUTTER_DIR"
 
           VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
-          BUILD_NUM="${{ github.run_number }}"
+          BUILD_NUM=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f2 | tr -d '[:space:]')
           echo "Building SunMate version: $VERSION_NAME (Build $BUILD_NUM)"
 
           cat << EOF > ios/Flutter/Generated.xcconfig

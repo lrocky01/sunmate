@@ -18,6 +18,10 @@ Payload/
 .pub/
 sunmate_app/.dart_tool/
 sunmate_app/.packages
+sunmate_app/.flutter-plugins-dependencies
+sunmate_app/ios/Flutter/ephemeral/
+sunmate_app/ios/Runner/GeneratedPluginRegistrant.h
+sunmate_app/ios/Runner/GeneratedPluginRegistrant.m
 sunmate_app/build/
 sunmate_app/ios/Pods/
 sunmate_app/ios/.symlinks/

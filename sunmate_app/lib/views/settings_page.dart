@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../core/ai/asr_service.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../models/button_action_config.dart';
 import '../providers/button_action_provider.dart';
@@ -29,7 +28,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _hermesStatusText = "未测试";
   Color _hermesStatusColor = Colors.grey;
   bool _isTesting = false;
-  bool _ancsEnabled = true;
 
   void _syncConfigToProvider() {
     ref.read(serverConfigProvider.notifier).updateConfig(
@@ -486,28 +484,33 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       const Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("启用硬件 ANCS 监听",
+                          Text("连接时请求系统通知授权",
                               style: TextStyle(fontWeight: FontWeight.bold)),
-                          Text("微信/钉钉/短信 推送自动同步",
+                          Text("下次连接生效，系统授权单独管理",
                               style: TextStyle(fontSize: 12, color: Colors.grey)),
                         ],
                       ),
                       Switch(
-                        value: _ancsEnabled,
-                        onChanged: (val) {
-                          setState(() => _ancsEnabled = val);
-                          devNotifier.sendAncsConfig(enable: val);
+                        value: devNotifier.requiresAncs,
+                        onChanged: (val) async {
+                          final saved = await devNotifier.sendAncsConfig(enable: val);
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+                            saved ? '已保存，下次连接录音卡时生效' : 'ANCS 系统通知授权仅适用于 iPhone',
+                          )));
                         },
                       ),
                     ],
                   ),
                   const Divider(height: 20),
+                  Text('当前 ANCS：${devNotifier.ancsAuthorized == true ? "已授权" : "未授权或尚未确认"}'),
+                  const SizedBox(height: 8),
                   const Text(
                     "📌 iOS 真实系统配对指引：\n"
                     "1. 打开 iPhone【设置】->【蓝牙】；\n"
-                    "2. 在“我的设备”中找到【AiNote 6095】，点击右侧的 ⓘ 按钮；\n"
-                    "3. 务必开启【共享系统通知 (Share System Notifications)】开关；\n"
-                    "4. 硬件将把微信、短信等通知实时加密透传给阳光智伴！",
+                    "2. 找到已配对的 C·ONE，点击右侧 ⓘ；\n"
+                    "3. 若有【共享系统通知】开关，可在此管理授权；\n"
+                    "4. 系统授权与设备业务鉴权分开验证；本版不保证通知正文已可透传。",
                     style: TextStyle(fontSize: 12, color: Colors.blueGrey, height: 1.5),
                   ),
                 ],
