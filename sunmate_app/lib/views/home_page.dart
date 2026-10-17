@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.2 (身份绑定版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.3 (纯净就绪版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -421,7 +421,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -435,10 +435,25 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                         style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
-                IconButton(
-                  icon: const Icon(Icons.refresh),
-                  tooltip: "重新扫描",
-                  onPressed: _isConnecting ? null : _startScan,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      tooltip: "重新扫描",
+                      onPressed: _isConnecting ? null : _startScan,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      tooltip: "关闭弹窗",
+                      onPressed: () {
+                        setState(() {
+                          _isConnecting = false;
+                        });
+                        Navigator.of(context).maybePop();
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -519,22 +534,27 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
           Expanded(
             child: _isConnecting
                 ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const SizedBox(
-                            width: 48,
-                            height: 48,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 3,
-                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF8C00)),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
+                          // 若日志中已经出现成功握手，显示大号绿勾，否则显示转圈
+                          devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))
+                              ? const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 52)
+                              : const SizedBox(
+                                  width: 44,
+                                  height: 44,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 3,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF8C00)),
+                                  ),
+                                ),
+                          const SizedBox(height: 14),
                           Text(
-                            "正在连接 ${_connectingDeviceName ?? '录音卡'}...",
+                            devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))
+                                ? "✓ ${_connectingDeviceName ?? '录音卡'} 连接就绪！"
+                                : "正在连接 ${_connectingDeviceName ?? '录音卡'}...",
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 12),
@@ -573,6 +593,41 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                               ],
                             ),
                           ),
+                          const SizedBox(height: 16),
+                          // 操作按钮组：完成进入主界面 或 取消连接
+                          if (devNotifier.connectionLogs.any((l) => l.contains("握手成功") || l.contains("常亮就绪"))) ...[
+                            SizedBox(
+                              width: double.infinity,
+                              height: 44,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF2E7D32),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                ),
+                                icon: const Icon(Icons.done_all),
+                                label: const Text("完成并进入主界面", style: TextStyle(fontWeight: FontWeight.bold)),
+                                onPressed: () {
+                                  setState(() {
+                                    _isConnecting = false;
+                                  });
+                                  Navigator.of(context).maybePop();
+                                },
+                              ),
+                            ),
+                          ] else ...[
+                            TextButton.icon(
+                              icon: const Icon(Icons.cancel_outlined, size: 18),
+                              label: const Text("取消连接并返回"),
+                              style: TextButton.styleFrom(foregroundColor: Colors.grey.shade700),
+                              onPressed: () {
+                                setState(() {
+                                  _isConnecting = false;
+                                  _connectingDeviceId = null;
+                                });
+                              },
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -707,10 +762,13 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
 
                                 if (mounted) {
                                   if (ok) {
-                                    // 成功时保持就绪状态展示 500ms，直接平滑退出弹窗，杜绝跳回扫描列表的视觉闪烁
-                                    await Future.delayed(const Duration(milliseconds: 500));
+                                    // 成功时重置连接状态，保持就绪状态展示 600ms 后平滑退出弹窗
+                                    setState(() {
+                                      _isConnecting = false;
+                                    });
+                                    await Future.delayed(const Duration(milliseconds: 600));
                                     if (mounted) {
-                                      Navigator.of(context).pop();
+                                      Navigator.of(context).maybePop();
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
                                           content: Text("✓ 已成功连接到 $name！指示灯常亮就绪"),

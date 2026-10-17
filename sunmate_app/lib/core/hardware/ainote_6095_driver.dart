@@ -179,11 +179,6 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           _heartbeatTimer?.cancel();
           _heartbeatTimer = null;
           _stateChangeController.add(null);
-
-          // 若非手动主动断开，启动后台平滑重连，保障链路持久在线
-          if (!_manualDisconnect) {
-            _scheduleAutoReconnect();
-          }
         }
       });
 
@@ -298,46 +293,31 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发标准 TLV 协议指令序列 (对齐官方生命周期握手与安全身份绑定)
-      _logProgress("5/6 正在下发时间同步与官方安全绑定鉴权 (bindRequest)...");
+      // 5. 下发标准官方 TLV 指令序列 (时间校准 -> 状态查询 -> 就绪常亮灯控 -> ANCS通知伴侣)
+      _logProgress("5/6 正在下发时间同步与官方状态就绪指令序列...");
       try {
-        // 5.1 时间校准
+        // 5.1 硬件 RTC 时钟校准
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
+        _logProgress("✓ 5.1 硬件时钟同步完成");
 
-        // 5.2 核心绑定握手：下发 19位用户ID、6位验证码、8位十六进制校验签名，彻底终结下位机蓝灯未连接态
-        await Future.delayed(const Duration(milliseconds: 150));
-        final bindTlv = BleJsonRpc.bindRequest(
-          confirmCode: "123456",
-          sign: "a1b2c3d4",
-          userId: "1000000000000000001",
-        );
-        final bindJson = BleJsonRpc.buildRawJson("bindRequest", {
-          "confirm_code": "123456",
-          "sign": "a1b2c3d4",
-          "user_id": "1000000000000000001",
-          "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
-        });
-        await _sendCommandBoth(bindTlv, bindJson);
-        _logProgress("5/6 绑定请求已下发，芯片完成身份登记注册...");
-
-        // 5.3 尝试触发系统层级配对绑定 (Android 端弹出系统配对框并写入设置列表，iOS 端触发系统 SMP 绑定)
-        try {
-          await device.createBond();
-          _logProgress("✓ 触发系统级蓝牙绑定流程 (Bonding)");
-        } catch (_) {}
-
-        // 5.4 获取设备状态与电量
+        // 5.2 获取设备状态与电量 (官方标准 JSON-RPC getStatus)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getStatus());
+        _logProgress("✓ 5.2 硬件工作状态与电量查询就绪");
 
-        // 5.5 获取用户配置
+        // 5.3 获取用户配置 (官方标准 getUserSettings)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getUserSettings());
 
-        // 5.6 下发成功就绪常亮灯控 (mode: 4)
+        // 5.4 激活指示灯为连接就绪常亮态 (mode: 4, 结束快闪等待态)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
+        _logProgress("✓ 5.3 硬件指示灯已置为连接就绪常亮");
+
+        // 5.5 配置 iOS 系统通知服务 (ANCS 伴侣服务)
+        await Future.delayed(const Duration(milliseconds: 150));
+        await _sendCommand(BleJsonRpc.setAncsConfig(enable: true, mode: 3));
       } catch (e) {
         print("握手指令序列下发提示: $e");
       }

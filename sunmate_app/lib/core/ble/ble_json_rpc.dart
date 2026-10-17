@@ -6,16 +6,13 @@ import 'ble_tlv_packet.dart';
 class BleJsonRpc {
   static int _requestId = 1;
 
-  /// 构造 JSON-RPC 文本为 TLV 报文
+  /// 构造标准官方 JSON-RPC 文本为 TLV 报文 (严格对齐 YoooClaw classes.dex 原生协议格式，无多余冗余字段)
   static Uint8List buildRequest(int type, String method, [Map<String, dynamic>? params]) {
     final Map<String, dynamic> rpcMap = {
       "version": "1.0.0",
       "method": method,
-      "id": _requestId++,
+      "params": params ?? {},
     };
-    if (params != null && params.isNotEmpty) {
-      rpcMap["params"] = params;
-    }
     final jsonStr = jsonEncode(rpcMap);
     final utf8Bytes = utf8.encode(jsonStr);
     return BleTlvPacket(type: type, value: Uint8List.fromList(utf8Bytes)).toBytes();
