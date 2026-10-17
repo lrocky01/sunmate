@@ -293,39 +293,27 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发标准官方 TLV 指令序列 (时间校准 -> isIos绑定配对 -> 状态查询 -> 就绪常亮灯控 -> ANCS通知伴侣)
-      _logProgress("5/6 正在下发时间同步与官方绑定配对序列...");
+      // 5. 下发标准官方 TLV 指令序列 (时间校准 -> 状态查询 -> 用户设置 -> 就绪常亮灯控)
+      _logProgress("5/6 正在下发官方就绪指令序列...");
       try {
         // 5.1 硬件 RTC 时钟校准
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
         _logProgress("✓ 5.1 硬件时钟同步完成");
 
-        // 5.2 核心绑定与 iOS 系统配对握手 (声明 isIos: true，促使下位机芯片向 iOS 发起系统级 SMP 配对)
+        // 5.2 获取设备状态与电量 (官方标准 JSON-RPC getStatus)
         await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.bindRequest(isIos: true));
-        _logProgress("✓ 5.2 已下发官方绑定鉴权 (isIos: true)，触发芯片向 iOS 发起系统配对申请");
-        _logProgress("📱 提示：若屏幕弹出【蓝牙配对请求】，请务必点击【配对】");
-
-        // 预留 600ms 供下位机完成绑定鉴权并拉起系统配对事件
-        await Future.delayed(const Duration(milliseconds: 600));
-
-        // 5.3 获取设备状态与电量 (官方标准 JSON-RPC getStatus)
         await _sendCommand(BleJsonRpc.getStatus());
-        _logProgress("✓ 5.3 硬件工作状态与电量查询就绪");
+        _logProgress("✓ 5.2 硬件工作状态与电量查询就绪");
 
-        // 5.4 获取用户配置 (官方标准 getUserSettings)
+        // 5.3 获取用户配置 (官方标准 getUserSettings)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getUserSettings());
 
-        // 5.5 激活指示灯为连接就绪常亮态 (mode: 4, 结束快闪等待态)
+        // 5.4 激活指示灯为连接就绪常亮态 (mode: 4, 结束快闪等待态)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
-        _logProgress("✓ 5.4 硬件指示灯已置为连接就绪常亮");
-
-        // 5.6 配置 iOS 系统通知服务 (ANCS 伴侣服务，加固系统配件关联)
-        await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.setAncsConfig(enable: true, mode: 3));
+        _logProgress("✓ 5.3 硬件指示灯已置为连接就绪常亮");
       } catch (e) {
         print("握手指令序列下发提示: $e");
       }
@@ -493,8 +481,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<void> _sendCommand(Uint8List bytes) async {
     if (_cmdChar != null) {
       try {
-        final withoutResp = _cmdChar!.properties.writeWithoutResponse && !_cmdChar!.properties.write;
-        await _cmdChar!.write(bytes, withoutResponse: withoutResp);
+        // 关键第一性原理：2B15 是透传命令通道，必须使用 withoutResponse: true
+        // 若使用 withResponse，iOS 会强制等待下位机回复 GATT Write Response。下位机无此回包，5秒后 iOS 会强制切断蓝牙连接！
+        final canWriteWithoutResp = _cmdChar!.properties.writeWithoutResponse;
+        await _cmdChar!.write(bytes, withoutResponse: canWriteWithoutResp);
       } catch (e) {
         try {
           await _cmdChar!.write(bytes, withoutResponse: true);
