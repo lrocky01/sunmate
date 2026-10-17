@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.5 (纯净持久直连版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.6 (稳定直连与就绪守护版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -385,11 +385,27 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
     });
   }
 
-  void _startScan() {
+  Future<void> _startScan() async {
     setState(() {
       _connectionError = null;
     });
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    try {
+      // 关键第一性原理：必须等待 CBCentralManager 状态变为 poweredOn 再扫描
+      // 若当前为 unknown 或 unauthorized，直接调用 startScan 会静默失败
+      if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+        await FlutterBluePlus.adapterState
+            .where((s) => s == BluetoothAdapterState.on)
+            .first
+            .timeout(const Duration(seconds: 4));
+      }
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _connectionError = "蓝牙未就绪或未授权，请确认 iPhone 蓝牙已开启且允许 App 访问蓝牙";
+        });
+      }
+    }
   }
 
   @override
