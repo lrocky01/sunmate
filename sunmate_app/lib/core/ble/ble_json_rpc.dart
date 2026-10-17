@@ -82,19 +82,22 @@ class BleJsonRpc {
     });
   }
 
-  // 11. 设备首次配对绑定请求 (对齐官方 bindRequest)
+  // 11. 设备首次配对绑定请求 (对齐官方 bindRequest，携带 isIos: true 触发固件主动向 iOS 发起系统 SMP 配对)
   // confirm_code: 6位配对码
   // sign: 8位十六进制校验签名
   // user_id: 19位本地用户唯一ID
+  // isIos: 告知固件对端为 iOS，触发下位机芯片发起 GAP_Security_Req (系统级蓝牙配对弹窗)
   static Uint8List bindRequest({
     String confirmCode = "123456",
     String sign = "a1b2c3d4",
     String userId = "1000000000000000001",
+    bool isIos = true,
   }) {
     return buildRequest(0x0003, "bindRequest", {
       "confirm_code": confirmCode,
       "sign": sign,
       "user_id": userId,
+      "isIos": isIos,
       "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
     });
   }

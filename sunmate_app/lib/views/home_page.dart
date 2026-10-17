@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.3 (纯净就绪版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.4 (系统配对版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -506,23 +506,23 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             ),
           ],
 
-          // 录音卡应用层直连说明横幅
+          // 系统蓝牙配对关键引导横幅
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F8E9),
+              color: const Color(0xFFFFF8E1),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFC8E6C9)),
+              border: Border.all(color: const Color(0xFFFFD54F)),
             ),
             child: const Row(
               children: [
-                Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF2E7D32)),
+                Icon(Icons.info_outline, size: 20, color: Color(0xFFF57F17)),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "连接说明：录音卡采用应用层安全直连协议，不占用 iOS 系统设置列表。点击连接后指示灯由快闪转为常亮即为就绪。",
-                    style: TextStyle(fontSize: 11, color: Color(0xFF1B5E20), height: 1.3),
+                    "系统配对提示：点击【连接】后，若手机屏幕弹出【蓝牙配对请求】系统对话框，请务必点击【配对】，录音卡即可常驻于苹果【设置 -> 蓝牙】列表中。",
+                    style: TextStyle(fontSize: 11, color: Color(0xFFE65100), height: 1.35, fontWeight: FontWeight.w500),
                   ),
                 ),
               ],

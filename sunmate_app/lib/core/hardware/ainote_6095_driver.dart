@@ -293,29 +293,37 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发标准官方 TLV 指令序列 (时间校准 -> 状态查询 -> 就绪常亮灯控 -> ANCS通知伴侣)
-      _logProgress("5/6 正在下发时间同步与官方状态就绪指令序列...");
+      // 5. 下发标准官方 TLV 指令序列 (时间校准 -> isIos绑定配对 -> 状态查询 -> 就绪常亮灯控 -> ANCS通知伴侣)
+      _logProgress("5/6 正在下发时间同步与官方绑定配对序列...");
       try {
         // 5.1 硬件 RTC 时钟校准
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
         _logProgress("✓ 5.1 硬件时钟同步完成");
 
-        // 5.2 获取设备状态与电量 (官方标准 JSON-RPC getStatus)
+        // 5.2 核心绑定与 iOS 系统配对握手 (声明 isIos: true，促使下位机芯片向 iOS 发起系统级 SMP 配对)
         await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.getStatus());
-        _logProgress("✓ 5.2 硬件工作状态与电量查询就绪");
+        await _sendCommand(BleJsonRpc.bindRequest(isIos: true));
+        _logProgress("✓ 5.2 已下发官方绑定鉴权 (isIos: true)，触发芯片向 iOS 发起系统配对申请");
+        _logProgress("📱 提示：若屏幕弹出【蓝牙配对请求】，请务必点击【配对】");
 
-        // 5.3 获取用户配置 (官方标准 getUserSettings)
+        // 预留 600ms 供下位机完成绑定鉴权并拉起系统配对事件
+        await Future.delayed(const Duration(milliseconds: 600));
+
+        // 5.3 获取设备状态与电量 (官方标准 JSON-RPC getStatus)
+        await _sendCommand(BleJsonRpc.getStatus());
+        _logProgress("✓ 5.3 硬件工作状态与电量查询就绪");
+
+        // 5.4 获取用户配置 (官方标准 getUserSettings)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getUserSettings());
 
-        // 5.4 激活指示灯为连接就绪常亮态 (mode: 4, 结束快闪等待态)
+        // 5.5 激活指示灯为连接就绪常亮态 (mode: 4, 结束快闪等待态)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
-        _logProgress("✓ 5.3 硬件指示灯已置为连接就绪常亮");
+        _logProgress("✓ 5.4 硬件指示灯已置为连接就绪常亮");
 
-        // 5.5 配置 iOS 系统通知服务 (ANCS 伴侣服务)
+        // 5.6 配置 iOS 系统通知服务 (ANCS 伴侣服务，加固系统配件关联)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.setAncsConfig(enable: true, mode: 3));
       } catch (e) {
