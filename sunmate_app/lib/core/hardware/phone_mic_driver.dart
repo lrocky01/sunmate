@@ -27,6 +27,9 @@ class PhoneMicDriver implements HardwareDeviceDriver {
   String get displayName => "手机内置麦克风 (无外设模式)";
 
   @override
+  String get snNumber => "";
+
+  @override
   bool get isConnected => _isConnected;
 
   @override
