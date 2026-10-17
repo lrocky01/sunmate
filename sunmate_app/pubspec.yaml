@@ -23,5 +23,8 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^3.0.0
 
+dependency_overrides:
+  shared_preferences_foundation: 2.5.4
+
 flutter:
   uses-material-design: true
