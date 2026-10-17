@@ -6,7 +6,7 @@ import 'ble_tlv_packet.dart';
 class BleJsonRpc {
   static int _requestId = 1;
 
-  /// 构造标准官方 JSON-RPC 文本为 TLV 报文 (严格对齐 YoooClaw classes.dex 原生协议格式，无多余冗余字段)
+  /// 构造标准官方纯 JSON-RPC 报文 (严格以 { 开头、} 结尾，绝无 TLV 二进制脏头，杜绝下位机 cJSON 解析崩溃复位)
   static Uint8List buildRequest(int type, String method, [Map<String, dynamic>? params]) {
     final Map<String, dynamic> rpcMap = {
       "version": "1.0.0",
@@ -14,8 +14,7 @@ class BleJsonRpc {
       "params": params ?? {},
     };
     final jsonStr = jsonEncode(rpcMap);
-    final utf8Bytes = utf8.encode(jsonStr);
-    return BleTlvPacket(type: type, value: Uint8List.fromList(utf8Bytes)).toBytes();
+    return Uint8List.fromList(utf8.encode(jsonStr));
   }
 
   /// 快速构造各类具体业务指令
@@ -46,11 +45,10 @@ class BleJsonRpc {
   // 6. 恢复录音
   static Uint8List resumeRecord() => buildRequest(0x0013, "resumeRecord");
 
-  // 7. 同步 RTC 时钟 (秒级 Unix 时间戳)
+  // 7. 同步 RTC 时钟 (标准官方 JSON 格式，下位机无缝解析)
   static Uint8List syncTime([int? timestampSec]) {
     final sec = timestampSec ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
-    final buffer = ByteData(4)..setUint32(0, sec, Endian.little);
-    return BleTlvPacket(type: 0x0005, value: buffer.buffer.asUint8List()).toBytes();
+    return buildRequest(0x0005, "setUserSettings", {"timestamp": sec});
   }
 
   // 8. 麦克风增益配置 (0~48dB)
