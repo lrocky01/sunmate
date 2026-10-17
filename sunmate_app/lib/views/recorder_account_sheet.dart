@@ -194,6 +194,15 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
               Padding(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   child: Text(_status)),
+            if (_account.diagnostics.isNotEmpty) ...[
+              SelectableText(_account.diagnostics.join('\n'),
+                  style: const TextStyle(fontSize: 11)),
+              TextButton(
+                  onPressed: () => Clipboard.setData(ClipboardData(
+                      text: 'SunMate 官方账号请求诊断\n'
+                          '${_account.diagnostics.join("\n")}')),
+                  child: const Text('复制账号诊断（不含凭据）')),
+            ],
             for (final binding in _bindings)
               Card(
                   child: Padding(

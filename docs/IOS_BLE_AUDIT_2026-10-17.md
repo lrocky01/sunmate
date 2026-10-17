@@ -211,3 +211,15 @@ QR 解析器接受带 sn/sign 和可选 confirm_code 的激活地址，重新绑
 `yoooclaw_account.dart` 与账号页面接入上述正常短信登录，并尝试读取自己的 `/api/device/toc/homePage/pub/index`。所有账号测试使用内存 HTTP adapter，没有对真实用户发出短信或绑定请求。未知协议、缺失/无效共享密钥、重复 SN/协议记录均拒绝猜选；恢复要求与当前卡实际 SN 和 GATT 协议匹配，不自动覆盖不同旧密钥。Token、手机号、验证码不写偏好或诊断，页面关闭后清除内存会话。仅所选共享密钥写入 Keychain/KeyStore；然后重连，仍须设备身份验证成功才报告就绪。
 
 这是可供手机验证的账号恢复接入，并非已证实跨渠道登录可用，也并非纯本地首次绑定完成。官网会话被拒、列表为空或缺少共享密钥时，页面给出脱敏结果，不改权限、不伪造签名、不自动解绑。私有音频及智能体路由未改。真机步骤见 [1.0.13 测试说明](IOS_BLE_TEST_1.0.13.md)。
+
+## 续查：设备接口 401/403 与认证格式（1.0.14+15）
+
+用户确认 1.0.13+14 短信登录成功，提示发生在设备列表阶段。旧代码把短信、登录和设备列表所有 HTTP 401/403 合成“当前会话没有该接口权限”，没有保留精确状态，因此这条提示并不能直接证明账号无权读取设备。
+
+原实现还把登录 Token 去除 Bearer 前缀后裸发，依据是 APK `HttpAuthorizationStyle.Raw`。该解释过强：重新核对 `Raw.format` 仅返回输入原文；`Bearer.format` 则规范化为一次 Bearer 前缀。实际 `AuthProvider` 实现 `com.huawei.hms.hatool.j0.getAuthorizationValue` 返回 `UserInfo.jwtToken` 原文，并不主动去除前缀。官网通用 HTTP 客户端则明确用 `Authorization: Bearer ${token}`。REA 方法证据为 `ev_9b520fc0454d8d115c65de5218b71e785e5793ddcd82316d9c665b4fad7b55b2`，对象是原 APK 的重建分析副本；不代表观察了 Android 登录运行时。
+
+为核查具体接口的认证方式，对已知的 `https://openclaw-service.yoooclaw.com/api/device/toc/homePage/pub/index` 发起**无凭据 GET**：返回 HTTP 401，`WWW-Authenticate: Bearer realm="https://openclaw-service.yoooclaw.com/api/device/toc/homePage/pub/index"`，纯文本 `Jwt is missing`。未发送假 Token、未读取用户资料、未调用短信、登录、绑定或解绑。保留的选定响应头和错误正文位于 `tools/ble_audit/account-401-public.har`，SHA-256 `0ba295679d664a0dffa5cecb2876ce5561c43a9944a54e435df32b654d7c5254`；REA 对该记录的解释证据为 `ev_26bcfd0f3c976c1aa862b7ed60186c0d0078f161ee8b0080d6d38cf952ce96ef`。这是 Python urllib 的公共未认证响应，非用户手机 POST 抓包；REA 不对部署真实性作额外认证，也未重新访问记录 URL。
+
+上述证据支持修复一个具体缺口：设备列表请求改为 `Authorization: Bearer <实际登录 Token>`，输入已带前缀时只保留一次。继续使用 channel=6 的正常官网账号，不猜 Android 受保护的登录体、不冒用官方 app_id、不自动降级或重试其它权限。公开的账号登录成功不保证绑定接口授权成功，尚须手机核对。
+
+新版错误与复制诊断保留请求阶段、HTTP 状态和白名单数字业务码；仅记录服务端认证 scheme 是否 Bearer，不记录 realm、Token、验证码、手机号、共享密钥或服务端正文。401 的说明改为“凭证未被接受”，403 改为“服务器拒绝访问，具体原因未确认”。仍不得把单个状态码解释为必须申请 SDK。测试及交付状态见 docs/todo.md，手机步骤见 [1.0.14 测试说明](IOS_BLE_TEST_1.0.14.md)。

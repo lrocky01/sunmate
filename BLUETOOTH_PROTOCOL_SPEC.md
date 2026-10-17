@@ -1,6 +1,6 @@
 # SunMate 已核对的录音卡 BLE 协议
 
-2026-10-17 修订，账号恢复测试版源码为 1.0.13+14。此前版本混合了 Telink 与 AiNote6095，并把 OTA 端点误作业务命令，已撤回。完整取证过程见 [审查报告](docs/IOS_BLE_AUDIT_2026-10-17.md)。
+2026-10-17 修订，账号恢复请求格式修复版源码为 1.0.14+15。此前版本混合了 Telink 与 AiNote6095，并把 OTA 端点误作业务命令，已撤回。完整取证过程见 [审查报告](docs/IOS_BLE_AUDIT_2026-10-17.md)。
 
 本规范来自指定 YoooClaw 2.3.0 APK 的静态实现，用户真机日志已经确认 C·ONE-4552 的 Telink GATT 与 verifyRequest；密码流程仍需真实材料与抓包验证。型号名称不能决定 profile；只按完整服务与特征组合选择，未知或同时匹配多个 profile 时不写入。
 
@@ -52,6 +52,8 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 官方账号的设备列表存在 extInfo.sharedSecret 恢复路径。1.0.13+14 已接入官网正常手机号与 4 位短信验证码登录（channel=6），随后用该会话读取账号设备列表；官网会话能否访问 Android App 的既有绑定，仍待用户手机实测。材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并重新连接，由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
 
+1.0.13+14 用户已确认验证码登录成功、设备列表请求被拒；该版移除 Bearer 后直接发送裸 Token 的实现存在格式缺口。设备接口公开的未认证响应声明 `WWW-Authenticate: Bearer`，1.0.14+15 因此按 `Authorization: Bearer <登录所得 Token>` 发送且只保留一个前缀。APK 的 `Raw` 表示保留已有格式，不等于要求裸 JWT。新的请求诊断区分步骤、HTTP 401/403 和数字业务码，不再把所有拒绝归为“没有权限”；实体账号权限及恢复仍待验证。
+
 `bindResult`/`pairingResult` 不是完整业务验证成功；`success:false` 必须失败。仅在本次挑战应答之后收到 `verifyIdentityResult` 且 `params.success` 为布尔 true，并完成事件和音频通道初始化，才记录业务验证成功。写队列完成、物理连接仍在、灯亮、ANCS 允许都不是替代条件。
 
 未确认 `setAncsConfig` 或自定义 ANCS 事件码，不发送这些指令。Telink 实时音频通过 voiceCmd 的 start/release/abort 和 session_id 控制。流内容使用两个 uint32 长度字段（Opus 长度、扩展长度），再跟 Opus 与扩展数据，可跨通知；优先 LE，否则按官方 plausibility 规则尝试 BE，单段长度各不超过 8192。不是旧四字节 session/seq 头。候选实现输出单声道 Ogg/Opus，输入采样率 16000、pre-skip 312、每包 granule 增量 960；空、截断、取消的会话不提交转写。长录音与 App 主动开始/暂停/恢复仍未核实，不假造命令。
@@ -62,4 +64,4 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HCI 证据，不把数秒断开定性为 MCU 鉴权看门狗、固件 JSON 崩溃或对端主动断开。
 
-账号恢复验收步骤见 [1.0.13 手机测试说明](docs/IOS_BLE_TEST_1.0.13.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
+最新账号恢复验收步骤见 [1.0.14 手机测试说明](docs/IOS_BLE_TEST_1.0.14.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。

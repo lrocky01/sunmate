@@ -17,15 +17,28 @@ class AccountHttpAdapter implements HttpClientAdapter {
     requests.add(options);
     return await respond!(options);
   }
+
   @override
   void close({bool force = false}) {}
 }
-ResponseBody response(Object body, {int status = 200}) => ResponseBody.fromString(
-  jsonEncode(body), status, headers: {Headers.contentTypeHeader: [Headers.jsonContentType]});
-Map<String, dynamic> record({String type = 'TELINK', String sn = 'AB00000000000001', String? secret}) => {
-  'externalDeviceId': sn, 'externalDeviceName': 'Test recorder', 'deviceType': type,
-  'extInfo': {'sharedSecret': secret ?? base64Encode(shared), 'mac': 'test-only-mac'},
-};
+
+ResponseBody response(Object body, {int status = 200}) =>
+    ResponseBody.fromString(jsonEncode(body), status, headers: {
+      Headers.contentTypeHeader: [Headers.jsonContentType]
+    });
+Map<String, dynamic> record(
+        {String type = 'TELINK',
+        String sn = 'AB00000000000001',
+        String? secret}) =>
+    {
+      'externalDeviceId': sn,
+      'externalDeviceName': 'Test recorder',
+      'deviceType': type,
+      'extInfo': {
+        'sharedSecret': secret ?? base64Encode(shared),
+        'mac': 'test-only-mac'
+      },
+    };
 void main() {
   late AccountHttpAdapter adapter;
   late YoooClawAccount client;
@@ -34,58 +47,181 @@ void main() {
     client = YoooClawAccount(http: Dio()..httpClientAdapter = adapter);
     adapter.respond = (r) {
       if (r.path.endsWith('/send-sms')) return response({'code': '0'});
-      if (r.path.endsWith('/login')) return response({'code': '200', 'data': {
-        'jwtToken': 'Bearer test-only-session', 'id': '1000000000000000001'}});
-      return response({'code': '000000', 'data': {'deviceList': [record()]}});
+      if (r.path.endsWith('/login'))
+        return response({
+          'code': '200',
+          'data': {
+            'jwtToken': 'Bearer test-only-session',
+            'id': '1000000000000000001'
+          }
+        });
+      return response({
+        'code': '000000',
+        'data': {
+          'deviceList': [record()]
+        }
+      });
     };
   });
   tearDown(() => client.close());
-  test('normal website login and account recovery follow observed contracts', () async {
+  test('normal website login and account recovery follow observed contracts',
+      () async {
     await client.sendSms('13800000000');
     await client.login('13800000000', '1234');
     final bindings = await client.loadBindings();
-    expect(adapter.requests.map((r) => r.uri.host), ['www.yoooclaw.com', 'www.yoooclaw.com', 'openclaw-service.yoooclaw.com']);
+    expect(adapter.requests.map((r) => r.uri.host), [
+      'www.yoooclaw.com',
+      'www.yoooclaw.com',
+      'openclaw-service.yoooclaw.com'
+    ]);
     expect(adapter.requests[0].data, {'phone': '13800000000', 'channel': 6});
-    expect(adapter.requests[1].data, {'phone': '13800000000', 'smsCode': '1234', 'channel': 6});
+    expect(adapter.requests[1].data,
+        {'phone': '13800000000', 'smsCode': '1234', 'channel': 6});
     expect(adapter.requests[2].uri.path, '/api/device/toc/homePage/pub/index');
-    expect(adapter.requests[2].headers['Authorization'], 'test-only-session');
+    expect(adapter.requests[2].headers['Authorization'],
+        'Bearer test-only-session');
     expect(adapter.requests[2].headers['app_key'], 'yoooclaw');
     expect(adapter.requests[0].headers.containsKey('Authorization'), false);
     expect(adapter.requests.every((r) => !r.followRedirects), true);
-    expect(bindings.single.matches('ab00000000000001', RecorderProtocol.telink), true);
+    expect(bindings.single.matches('ab00000000000001', RecorderProtocol.telink),
+        true);
     final keys = MemoryKeyStore();
     await bindings.single.saveForDevice(keys, 'ios-selected-peripheral');
     expect(keys.value, base64Encode(shared));
     expect(bindings.single.toString(), isNot(contains(base64Encode(shared))));
+    final diagnostic = client.diagnostics.join('\n');
+    expect(diagnostic, contains('读取设备列表：HTTP 200'));
+    for (final sensitive in [
+      'test-only-session',
+      '13800000000',
+      '1234',
+      base64Encode(shared)
+    ]) {
+      expect(diagnostic, isNot(contains(sensitive)));
+    }
   });
-  test('invalid input and queries without login never leave the device', () async {
-    await expectLater(client.sendSms('not-a-phone'), throwsA(isA<OfficialAccountException>()));
-    await expectLater(client.login('13800000000', '123456'), throwsA(isA<OfficialAccountException>()));
-    await expectLater(client.loadBindings(), throwsA(isA<OfficialAccountException>()));
+  test('bare website JWT gains the required Bearer scheme exactly once',
+      () async {
+    adapter.respond = (r) => r.path.endsWith('/login')
+        ? response({
+            'code': '200',
+            'data': {'jwtToken': 'test-only-bare-session', 'id': '123'}
+          })
+        : response({
+            'code': '200',
+            'data': {'deviceList': []}
+          });
+    await client.login('13800000000', '1234');
+    await client.loadBindings();
+    expect(adapter.requests.last.headers['Authorization'],
+        'Bearer test-only-bare-session');
+    expect(adapter.requests.last.data, isNull);
+    expect(adapter.requests.length, 2);
+  });
+  test('invalid input and queries without login never leave the device',
+      () async {
+    await expectLater(client.sendSms('not-a-phone'),
+        throwsA(isA<OfficialAccountException>()));
+    await expectLater(client.login('13800000000', '123456'),
+        throwsA(isA<OfficialAccountException>()));
+    await expectLater(
+        client.loadBindings(), throwsA(isA<OfficialAccountException>()));
     expect(adapter.requests, isEmpty);
   });
   test('HTTP failures do not expose request or response credentials', () async {
-    adapter.respond = (r) => response({'code': '401', 'msg': 'test-only-session and 1234'}, status: 401);
+    adapter.respond = (r) => response(
+        {'code': '401', 'msg': 'test-only-session and 1234'},
+        status: 401);
     try {
       await client.login('13800000000', '1234');
       fail('must reject');
     } on OfficialAccountException catch (error) {
+      expect(error.message, startsWith('验证码登录失败（HTTP 401'));
       expect(error.message, isNot(contains('test-only-session')));
       expect(error.message, isNot(contains('1234')));
       expect(client.isLoggedIn, false);
     }
   });
+  test(
+      'device 401 reports its stage and advertised scheme without leaking body or retrying',
+      () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (r) => ResponseBody.fromString(
+            'Jwt is missing test-only-session 1234', 401,
+            headers: {
+              'www-authenticate': [
+                'Basic realm="private-response-value"',
+                'Bearer realm="private-response-value"'
+              ]
+            });
+    try {
+      await client.loadBindings();
+      fail('must reject');
+    } on OfficialAccountException catch (error) {
+      expect(error.message, contains('读取设备列表失败（HTTP 401）'));
+      expect(error.message, isNot(contains('没有该接口权限')));
+      final text = '${error.message}\n${client.diagnostics.join("\n")}';
+      expect(text, contains('服务端认证方式 Bearer'));
+      for (final sensitive in [
+        'test-only-session',
+        '1234',
+        'private-response-value',
+        'Jwt is missing'
+      ]) {
+        expect(text, isNot(contains(sensitive)));
+      }
+    }
+    expect(adapter.requests.length, 2);
+  });
+  test(
+      'SMS rejection and device forbidden remain distinct; only numeric business codes survive',
+      () async {
+    adapter.respond = (r) => response(
+        {'code': '40301', 'msg': 'secret-code-from-server'},
+        status: 403);
+    await expectLater(
+        client.sendSms('13800000000'),
+        throwsA(isA<OfficialAccountException>().having((e) => e.message,
+            'stage', contains('获取验证码失败（HTTP 403；业务码 40301）'))));
+    adapter.respond = (r) => response({
+          'code': '200',
+          'data': {'jwtToken': 'test-only-session', 'id': '123'}
+        });
+    await client.login('13800000000', '1234');
+    adapter.respond = (r) => response(
+        {'code': 'secret-code-from-server', 'msg': 'sensitive-body'},
+        status: 403);
+    await expectLater(
+        client.loadBindings(),
+        throwsA(isA<OfficialAccountException>().having(
+            (e) => e.message, 'stage', contains('读取设备列表失败（HTTP 403）'))));
+    expect(client.diagnostics.join('\n'),
+        isNot(contains('secret-code-from-server')));
+    expect(adapter.requests.length, 3);
+  });
   test('invalid session headers cannot become a login', () async {
-    adapter.respond = (r) => response({'code': '200', 'data': {'jwtToken': 'bad\r\nheader', 'id': '123'}});
-    await expectLater(client.login('13800000000', '1234'), throwsA(isA<OfficialAccountException>()));
+    adapter.respond = (r) => response({
+          'code': '200',
+          'data': {'jwtToken': 'bad\r\nheader', 'id': '123'}
+        });
+    await expectLater(client.login('13800000000', '1234'),
+        throwsA(isA<OfficialAccountException>()));
     expect(client.isLoggedIn, false);
   });
-  test('duplicate records, missing keys and unknown profiles are never guessed', () async {
+  test('duplicate records, missing keys and unknown profiles are never guessed',
+      () async {
     await client.login('13800000000', '1234');
-    adapter.respond = (r) => response({'code': '200', 'data': {'deviceList': [
-      record(), record(), record(sn: 'AB00000000000002', type: 'UNKNOWN'),
-      record(sn: 'AB00000000000003', secret: 'redacted'),
-    ]}});
+    adapter.respond = (r) => response({
+          'code': '200',
+          'data': {
+            'deviceList': [
+              record(),
+              record(),
+              record(sn: 'AB00000000000002', type: 'UNKNOWN'),
+              record(sn: 'AB00000000000003', secret: 'redacted'),
+            ]
+          }
+        });
     expect(await client.loadBindings(), isEmpty);
     expect(client.totalDevices, 4);
   });
@@ -97,7 +233,8 @@ void main() {
     expect(keys.value, original);
     expect(keys.writes, 0);
     binding.clear();
-    expect(binding.matches(binding.serialNumber, RecorderProtocol.telink), false);
+    expect(
+        binding.matches(binding.serialNumber, RecorderProtocol.telink), false);
   });
   test('late response after closing cannot restore the session', () async {
     final pending = Completer<ResponseBody>();
@@ -105,7 +242,10 @@ void main() {
     final login = client.login('13800000000', '1234');
     await Future<void>.delayed(Duration.zero);
     client.close();
-    pending.complete(response({'code': '200', 'data': {'jwtToken': 'test-only-session', 'id': '123'}}));
+    pending.complete(response({
+      'code': '200',
+      'data': {'jwtToken': 'test-only-session', 'id': '123'}
+    }));
     await expectLater(login, throwsA(isA<OfficialAccountException>()));
     expect(client.isLoggedIn, false);
   });
