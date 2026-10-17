@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
+import '../main.dart';
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
@@ -243,18 +244,21 @@ class HomePage extends ConsumerWidget {
               title: "长按对讲 (直连智能体)",
               subtitle: "即按即说，物理键与屏幕软按键无缝呼叫第二大脑",
               color: const Color(0xFFFF8C00),
+              onTap: () => ref.read(currentTabProvider.notifier).state = 1,
             ),
             _FeatureTile(
               icon: Icons.groups,
               title: "会议录音与纪要提炼",
               subtitle: "高精度 ASR 自动转写，提炼核心共识与待办清单 Action Items",
               color: Colors.indigo,
+              onTap: () => ref.read(currentTabProvider.notifier).state = 2,
             ),
             _FeatureTile(
               icon: Icons.timeline,
               title: "随身时光机与成长画像",
               subtitle: "低功耗 VOR 声控记录 + 手机通知对齐，每日复盘认知决策",
               color: Colors.teal,
+              onTap: () => ref.read(currentTabProvider.notifier).state = 3,
             ),
           ],
         ),
@@ -294,12 +298,14 @@ class _FeatureTile extends StatelessWidget {
   final String title;
   final String subtitle;
   final Color color;
+  final VoidCallback? onTap;
 
   const _FeatureTile({
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.color,
+    this.onTap,
   });
 
   @override
@@ -307,14 +313,32 @@ class _FeatureTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: color.withOpacity(0.12),
-          child: Icon(icon, color: color),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: color.withOpacity(0.12),
+                child: Icon(icon, color: color),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    const SizedBox(height: 2),
+                    Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
+            ],
+          ),
         ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        subtitle: Text(subtitle, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Colors.grey),
       ),
     );
   }
@@ -467,15 +491,13 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                   );
                 }
 
-                // 2. 智能排序：推荐录音卡置顶 (支持 CONE、AiNote、6095 等或带 1913 服务)，其余按信号由强到弱排序
+                // 2. 智能排序：推荐录音卡置顶 (支持 C·ONE-4552, AiNote, 1913 服务等)，其余按信号由强到弱排序
                 validResults.sort((a, b) {
-                  final nameA = (a.device.platformName.isNotEmpty ? a.device.platformName : a.advertisementData.advName).toLowerCase();
-                  final nameB = (b.device.platformName.isNotEmpty ? b.device.platformName : b.advertisementData.advName).toLowerCase();
+                  final nameA = a.device.platformName.isNotEmpty ? a.device.platformName : a.advertisementData.advName;
+                  final nameB = b.device.platformName.isNotEmpty ? b.device.platformName : b.advertisementData.advName;
 
-                  final isTargetA = BleConstants.targetDevicePrefixes.any((p) => nameA.contains(p.toLowerCase())) ||
-                      a.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
-                  final isTargetB = BleConstants.targetDevicePrefixes.any((p) => nameB.contains(p.toLowerCase())) ||
-                      b.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
+                  final isTargetA = BleConstants.isTargetDevice(nameA, a.advertisementData.serviceUuids);
+                  final isTargetB = BleConstants.isTargetDevice(nameB, b.advertisementData.serviceUuids);
 
                   if (isTargetA && !isTargetB) return -1;
                   if (!isTargetA && isTargetB) return 1;
@@ -492,8 +514,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                         ? item.device.platformName
                         : item.advertisementData.advName;
 
-                    final isTarget = BleConstants.targetDevicePrefixes.any((prefix) => name.toLowerCase().contains(prefix.toLowerCase())) ||
-                        item.advertisementData.serviceUuids.any((u) => u.str.toLowerCase().contains("1913"));
+                    final isTarget = BleConstants.isTargetDevice(name, item.advertisementData.serviceUuids);
 
                     final isThisConnecting = _isConnecting && _connectingDeviceId == item.device.remoteId.str;
 

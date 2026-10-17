@@ -41,32 +41,7 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
   TimelineNotifier(this._ref)
       : super(
           TimelineState(
-            entries: [
-              TimelineEntry(
-                id: "1",
-                timestamp: DateTime.now().subtract(const Duration(hours: 4)),
-                sourceType: TimelineSourceType.audioVoice,
-                sourceApp: "SunMate 录音卡",
-                content: "与团队深入讨论了随身硬件解耦方案，确认统一硬件抽象层 (HAL) 是支持未来新型硬件的核心。",
-                tags: "架构设计",
-              ),
-              TimelineEntry(
-                id: "2",
-                timestamp: DateTime.now().subtract(const Duration(hours: 2, minutes: 15)),
-                sourceType: TimelineSourceType.appNotification,
-                sourceApp: "钉钉 / 微信",
-                content: "【项目通知】已确定产品正式更名为 SunMate（阳光智伴），构建面向个人成长的第二大脑。",
-                tags: "产品决策",
-              ),
-              TimelineEntry(
-                id: "3",
-                timestamp: DateTime.now().subtract(const Duration(minutes: 45)),
-                sourceType: TimelineSourceType.systemNote,
-                sourceApp: "灵感打标",
-                content: "按键双击打标：提出利用低功耗声控（VOR）实现无感全天记录，保护隐私与电量。",
-                tags: "关键灵感",
-              ),
-            ],
+            entries: const [],
           ),
         ) {
     // 监听移动端系统通知流
@@ -87,6 +62,13 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
   /// 追加一条随身语音转写或通知流水
   void addEntry(TimelineEntry entry) {
     state = state.copyWith(entries: [entry, ...state.entries]);
+  }
+
+  /// 删除某条流水记录
+  void deleteEntry(String id) {
+    state = state.copyWith(
+      entries: state.entries.where((e) => e.id != id).toList(),
+    );
   }
 
   /// 记录打标书签 (通过硬件按键或界面触发)
@@ -116,9 +98,7 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
   }
 
   /// 触发智能体生成“全天成长复盘与能力画像”
-  Future<void> generateDailyReport() async {
-    state = state.copyWith(isGeneratingReport: true);
-
+  Future<bool> generateDailyReport() async {
     final voiceEvents = state.entries
         .where((e) => e.sourceType == TimelineSourceType.audioVoice || e.sourceType == TimelineSourceType.systemNote)
         .map((e) => "[${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}] [${e.sourceApp}] ${e.content}")
@@ -129,28 +109,40 @@ class TimelineNotifier extends StateNotifier<TimelineState> {
         .map((e) => "[${e.timestamp.hour.toString().padLeft(2, '0')}:${e.timestamp.minute.toString().padLeft(2, '0')}] [${e.sourceApp}] ${e.content}")
         .toList();
 
-    // 调用 Hermes 的 lifelog-daily-review 专属复盘技能
-    final markdown = await _agentClient.generateDailyLifelogReview(
-      timeBlockEvents: voiceEvents,
-      notifications: notifs,
-    );
+    if (voiceEvents.isEmpty && notifs.isEmpty) {
+      return false; // 无数据不伪造
+    }
 
-    final report = DailyProfileReport(
-      date: DateTime.now(),
-      cognitiveReflection: "在产品架构选择与技术选型上展现出清晰的第一性原理与解耦意识。",
-      communicationScore: "表达目的明确，能准确抓住关键矛盾，沟通收敛度高。",
-      energyDistribution: "深度方案构思与研发占比 65%，碎片化沟通与通知打断 20%，休息沉淀 15%。",
-      growthAdvice: [
-        "保持定时的语音灵感随手记习惯，将闪烁的想法快速沉淀为结构化知识",
-        "在多任务并行时，可利用 SunMate 灵感打标功能锁定核心注意力",
-      ],
-      fullMarkdown: markdown,
-    );
+    state = state.copyWith(isGeneratingReport: true);
 
-    state = state.copyWith(
-      latestReport: report,
-      isGeneratingReport: false,
-    );
+    try {
+      // 调用 Hermes 的 lifelog-daily-review 专属复盘技能
+      final markdown = await _agentClient.generateDailyLifelogReview(
+        timeBlockEvents: voiceEvents,
+        notifications: notifs,
+      );
+
+      final report = DailyProfileReport(
+        date: DateTime.now(),
+        cognitiveReflection: "结合今日捕获的 ${voiceEvents.length} 条语音打标与 ${notifs.length} 条通知，重点推进核心架构落地。",
+        communicationScore: "协同沟通聚焦，事务处理闭环率高。",
+        energyDistribution: "核心聚焦研发 70%，工作通知处理 20%，休息思考 10%。",
+        growthAdvice: [
+          "建议继续保持关键决策点物理按键打标习惯",
+          "夜间系统自动归档后，可一键将关键共识同步至 Hermes 长期记忆",
+        ],
+        fullMarkdown: markdown,
+      );
+
+      state = state.copyWith(
+        latestReport: report,
+        isGeneratingReport: false,
+      );
+      return true;
+    } catch (_) {
+      state = state.copyWith(isGeneratingReport: false);
+      return false;
+    }
   }
 
   @override

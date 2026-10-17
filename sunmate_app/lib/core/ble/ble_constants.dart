@@ -32,8 +32,11 @@ class BleConstants {
   static const int eventAncsNotification = 0x20;
   static const int eventAncsConfigResponse = 0x21;
 
-  // 广播过滤关键字 (包含用户提到的 CONE 批次)
+  // 广播过滤关键字 (官方 C·ONE, AiNote 6095 等全系列)
   static const List<String> targetDevicePrefixes = [
+    "C·ONE",
+    "C.ONE",
+    "C-ONE",
     "CONE",
     "AiNote",
     "ATW6095",
@@ -41,4 +44,34 @@ class BleConstants {
     "Claw",
     "Yooo",
   ];
+
+  /// 智能判定是否为推荐录音卡设备 (支持 C·ONE-4552、AiNote、1913 服务等归一化校验)
+  static bool isTargetDevice(String advName, [List<dynamic>? serviceUuids]) {
+    if (advName.isEmpty) return false;
+    final lower = advName.toLowerCase();
+
+    // 1. 服务 UUID 中包含 1913
+    if (serviceUuids != null) {
+      for (final u in serviceUuids) {
+        final str = u.toString().toLowerCase();
+        if (str.contains("1913")) return true;
+      }
+    }
+
+    // 2. 原始前缀直接包含 (如 C·ONE-4552)
+    for (final prefix in targetDevicePrefixes) {
+      if (lower.contains(prefix.toLowerCase())) return true;
+    }
+
+    // 3. 剥离特殊标点符号后的归一化校验 (如把 'c·one' 变为 'cone')
+    final normalized = lower.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+    if (normalized.contains("cone") ||
+        normalized.contains("ainote") ||
+        normalized.contains("6095") ||
+        normalized.contains("atw")) {
+      return true;
+    }
+
+    return false;
+  }
 }

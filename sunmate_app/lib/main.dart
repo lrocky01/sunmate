@@ -34,17 +34,13 @@ class SunMateApp extends StatelessWidget {
   }
 }
 
-class RootNavigationContainer extends StatefulWidget {
+/// 全局底部导航当前选中 Tab Provider (0: 首页, 1: 对讲, 2: 会议纪要, 3: 时光复盘, 4: 设置)
+final currentTabProvider = StateProvider<int>((ref) => 0);
+
+class RootNavigationContainer extends ConsumerWidget {
   const RootNavigationContainer({super.key});
 
-  @override
-  State<RootNavigationContainer> createState() => _RootNavigationContainerState();
-}
-
-class _RootNavigationContainerState extends State<RootNavigationContainer> {
-  int _currentIndex = 0;
-
-  final List<Widget> _pages = const [
+  static const List<Widget> _pages = [
     HomePage(),
     ChatPage(),
     MeetingPage(),
@@ -53,15 +49,17 @@ class _RootNavigationContainerState extends State<RootNavigationContainer> {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final currentIndex = ref.watch(currentTabProvider);
+
     return Scaffold(
       body: IndexedStack(
-        index: _currentIndex,
+        index: currentIndex,
         children: _pages,
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (idx) => setState(() => _currentIndex = idx),
+        selectedIndex: currentIndex,
+        onDestinationSelected: (idx) => ref.read(currentTabProvider.notifier).state = idx,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),
