@@ -3,6 +3,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
+import '../core/ble/yoooclaw_account.dart';
 import '../models/device_status.dart';
 
 /// 硬件驱动工厂全局 Provider
@@ -117,6 +118,18 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
   bool? get ancsAuthorized => _factory.bleDriver.ancsAuthorized;
 
   Future<void> cancelBleConnection() => _factory.bleDriver.disconnect();
+
+  String get detectedBleSerial => _factory.bleDriver.snNumber;
+  bool canRestoreBinding(OwnedRecorderBinding binding) =>
+      _factory.bleDriver.canRestoreBinding(binding);
+
+  Future<bool> restoreBindingAndReconnect(OwnedRecorderBinding binding) async {
+    if (!await _factory.bleDriver.restoreOwnedBinding(binding)) return false;
+    await switchDriverType(HardwareDeviceType.ainote6095Ble);
+    final result = await _factory.bleDriver.connect();
+    _updateStateFromDriver(_factory.activeDriver);
+    return result;
+  }
 
   /// 实时连接诊断日志流
   Stream<String> get logStream => _factory.bleDriver.logStream;

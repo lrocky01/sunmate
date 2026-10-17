@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
+import 'recorder_account_sheet.dart';
 import '../main.dart';
 
 class HomePage extends ConsumerWidget {
@@ -23,7 +24,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.12+13 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.13+14 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -390,7 +391,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('蓝牙诊断 · 1.0.12+13', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('蓝牙诊断 · 1.0.13+14', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -404,6 +405,11 @@ class BleDiagnosticsSheet extends ConsumerWidget {
               const Text('日志包含设备标识、GATT 与系统错误，不包含密钥或通知正文。', style: TextStyle(fontSize: 12, color: Colors.grey)),
               const Divider(),
               Expanded(child: SingleChildScrollView(child: SelectableText(notifier.diagnosticText, style: const TextStyle(fontFamily: 'monospace', fontSize: 11)))),
+              TextButton.icon(
+                onPressed: () => showModalBottomSheet(
+                  context: context, isScrollControlled: true,
+                  builder: (_) => const RecorderAccountSheet()),
+                icon: const Icon(Icons.key), label: const Text('通过自己的官方账号恢复设备绑定')),
               if (notifier.isBleLinkConnected || notifier.isBleConnecting)
                 TextButton(onPressed: notifier.cancelBleConnection, child: const Text('取消并断开蓝牙连接')),
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('关闭')),

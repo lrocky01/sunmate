@@ -183,4 +183,31 @@ REA 对 `BleDeviceStore$$ExternalSyntheticLambda6.invoke` 的补充结果保存�
 
 已用 RFC 7748 公开向量核对 X25519，用独立 OpenSSL 结果核对 AES-CBC 填充；模拟 GATT 已走通“预存密钥→随机挑战→真实算法应答→成功回执”的流程，验证不再发 bindRequest；生成的 Ogg/Opus 已用本机 FFmpeg 解码。测试向量及模拟服务只在 test/ 内，不能被当作真实设备材料。本次最终测试结果记录于 docs/todo.md。
 
-下一步必须先取得用户自有账号的正常授权接入或真实设备绑定资料，验证恢复接口与目标设备身份匹配，再将材料写入安全存储；若只能首次绑定，则接上合法厂商验机服务。随后在实体 iPhone 验证鉴权成功、至少 10 分钟稳定连接、重复重连、物理按键完整录音及私有 ASR 转写。未达到这些条件前，整体任务仍未完成。
+上述为 1.0.12+13 本地候选阶段记录，新的账号恢复进展见下一节。实体 iPhone 的鉴权成功、至少 10 分钟稳定连接、重复重连、物理按键完整录音及私有 ASR 转写仍是整体任务终点。
+
+## 续查：正常官网账号恢复（1.0.13+14）
+
+用户已确认首次官方绑定需联网，绑定成功后关闭网络仍可 BLE 连接、收到长按响应；失败的是官方在线 ASR。这支持“首次验机联网、已有共享密钥后本地重连”的判断，不能据此推导首次也可离线。包装仅有 App 下载二维码，没有可验证的工厂 sn/sign 绑定材料。
+
+### 找到普通账号入口，无需预先提供 API Key
+
+官网 [正常登录页](https://www.yoooclaw.com/login) 公开前端模块 2652 定义：`POST /api/auth/send-sms` 请求 `{phone,channel:6}`；`POST /api/auth/login` 请求 `{phone,smsCode,channel:6}`，页面限制 4 位验证码。响应 `data.jwtToken/data.id` 用于账号会话，客户端去除 Bearer 前缀。所用公开脚本：
+
+- [账号 API 模块](https://www.yoooclaw.com/_next/static/chunks/e696518a1a997015.js)，SHA-256 `d7252610e39f4d299e866eadaf645e4aa4188d446b08d49ea640a9d39467c406`。
+- [登录界面模块](https://www.yoooclaw.com/_next/static/chunks/0e4e3085115ed518.js)，SHA-256 `639afea092ef1f04fdc06a1557878dfea99b0a45f0c429d9a49df4da655ee35e`。
+
+REA 对原始脚本快照目录的静态证据为 `ev_e538dc5a4d125d16e76f64b1ee1b201649be814fd31d5b813f43fddcc162f5ab`，本地原始证据位于忽略目录 `tools/ble_audit/official-downloads/rea-web-auth-directory.json`。未填写真实账号、未发送短信、未执行登录，也未观察该用户会话的后端响应；Turbopack 的动态引用不代表完整调用图。Android accountChannel 为 3，官网为 6，跨渠道设备记录权限尚未知，未猜改渠道。
+
+APK 的 DistributionConfig 中公开产品标识 `app_key` 为 `yoooclaw`，不是账号密钥，也不是 channel=3。账号设备列表请求使用正常会话 Authorization、UserId/user_id；不会将登录密码或短信验证码当成设备签名。
+
+### 当前官方 APK 复核与纯本地边界
+
+官网公开 `/api/android-release` 指向 [当前 Android 包](https://apk.yoooclaw.com/package/yoooclaw.apk)。2026-10-17 下载包为 75,671,880 字节，SHA-256 `c1382fe1bc55eb80ebc8a9d4ed76394e712032f6cc075e07cb7423f4f4edb5de`，与用户提供包并非逐字节相同。重新提取三段 DEX，核对 12 个鉴权/绑定/存储相关类；10 个去除来源注释后相同，另外两个仅见合成 lambda 编号变化，不能因此声称全包相同。重新绑定、身份挑战、Telink 编码路径没有观察到新增离线首次绑定方式。分析副本、哈希和比较结果在忽略目录 `tools/ble_audit/official-downloads/`。
+
+QR 解析器接受带 sn/sign 和可选 confirm_code 的激活地址，重新绑定流程可将相应字段放进 bindRequest；这不证明 sign 可绕过后续 verifyRequest。部分登录代码仍被保护器清零，native provider 当前不可用，未恢复完整保护逻辑；没有固件和实际 HCI 抓包，不能排除所有可能的本地首次绑定路径。
+
+### 本轮落地与实机局限
+
+`yoooclaw_account.dart` 与账号页面接入上述正常短信登录，并尝试读取自己的 `/api/device/toc/homePage/pub/index`。所有账号测试使用内存 HTTP adapter，没有对真实用户发出短信或绑定请求。未知协议、缺失/无效共享密钥、重复 SN/协议记录均拒绝猜选；恢复要求与当前卡实际 SN 和 GATT 协议匹配，不自动覆盖不同旧密钥。Token、手机号、验证码不写偏好或诊断，页面关闭后清除内存会话。仅所选共享密钥写入 Keychain/KeyStore；然后重连，仍须设备身份验证成功才报告就绪。
+
+这是可供手机验证的账号恢复接入，并非已证实跨渠道登录可用，也并非纯本地首次绑定完成。官网会话被拒、列表为空或缺少共享密钥时，页面给出脱敏结果，不改权限、不伪造签名、不自动解绑。私有音频及智能体路由未改。真机步骤见 [1.0.13 测试说明](IOS_BLE_TEST_1.0.13.md)。

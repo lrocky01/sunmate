@@ -7,6 +7,7 @@ import '../ble/ble_json_rpc.dart';
 import '../ble/ble_protocol.dart';
 import '../ble/ios_ble_connection.dart';
 import '../ble/recorder_authentication.dart';
+import '../ble/yoooclaw_account.dart';
 import '../audio/opus_stream_receiver.dart';
 import 'hardware_device_driver.dart';
 
@@ -14,6 +15,7 @@ import 'hardware_device_driver.dart';
 class AiNote6095Driver implements HardwareDeviceDriver {
   static const _lastIdKey = 'sunmate_verified_ble_device_id_v2';
   static const _lastNameKey = 'sunmate_verified_ble_device_name_v2';
+  static const _lastSnKey = 'sunmate_verified_ble_device_sn_v2';
   static const _diagnosticsKey = 'sunmate_ble_diagnostics_v1';
   static const _ancsKey = 'sunmate_ble_requires_ancs';
   final _ios = IosBleConnection();
@@ -26,6 +28,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool _channelsReady = false;
   bool _identityVerified = false;
   bool _sawAuthenticationEvent = false;
+  bool _restoringIdentity = false;
   int? _voiceSession;
   final _buttonEvents = StreamController<DeviceButtonEvent>.broadcast();
   final _audioPackets = StreamController<AudioDataPacket>.broadcast();
@@ -33,6 +36,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final _logs = StreamController<String>.broadcast();
   final List<String> _connectionLogs = [];
   final List<StreamSubscription<dynamic>> _subscriptions = [];
+  final Map<String, String> _reportedSerials = {};
   late final Future<void> _initialization;
   late final StreamSubscription<Uint8List> _receiverSub;
 
@@ -86,7 +90,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool get isConnected => _isConnected;
   bool get isLinkConnected =>
       _linkEstablished && (_device?.isConnected ?? false);
-  bool get isConnecting => _connectionOperation != null;
+  bool get isConnecting => _connectionOperation != null || _restoringIdentity;
   bool get requiresAncs => _requiresAncs;
   bool? get ancsAuthorized => _ancsAuthorized;
   String get connectionSummary => _phase;
@@ -106,9 +110,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.12+13',
+        'SunMate 1.0.13+14',
         '当前阶段: $_phase',
         '设备: $_deviceName',
+        '设备上报 SN: $_serialNumber',
         '协议: ${_profile?.protocol.name ?? "未识别"}',
         '链路: $isLinkConnected; 业务就绪: $_isConnected; ANCS: ${_ancsAuthorized ?? "未知"}',
         ..._connectionLogs,
@@ -151,6 +156,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     final id = prefs.getString(_lastIdKey);
     if (id == null || _disposed) return false;
     _deviceName = prefs.getString(_lastNameKey) ?? '录音卡';
+    final sn = prefs.getString(_lastSnKey);
+    if (sn != null && RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(sn)) {
+      _reportedSerials[id] = sn;
+    }
     return connectDevice(BluetoothDevice.fromId(id), isAutoReconnect: true);
   }
 
@@ -158,6 +167,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<bool> connectDevice(BluetoothDevice device,
       {bool isAutoReconnect = false}) {
     if (_disposed) return Future.value(false);
+    if (_restoringIdentity) return Future.value(false);
     if (_connectionOperation != null) {
       if (_connectingId == device.remoteId.str) return _connectionOperation!;
       _log('另一个连接正在进行，请先取消');
@@ -194,7 +204,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _voiceSession = null;
       _audioReceiver.cancel();
       _ancsAuthorized = null;
-      _serialNumber = '--';
+      _serialNumber = _reportedSerials[device.remoteId.str] ?? '--';
       _batteryLevel = 0;
       _phase = '准备连接';
       _ready = Completer<bool>();
@@ -491,6 +501,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     if (params['sn'] is String &&
         RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(params['sn'] as String)) {
       _serialNumber = params['sn'] as String;
+      final id = _device?.remoteId.str;
+      if (id != null) _reportedSerials[id] = _serialNumber;
     }
     if (method == 'verifyRequest') {
       _phase = '厂商验机';
@@ -611,6 +623,45 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_lastIdKey, device.remoteId.str);
     await prefs.setString(_lastNameKey, _deviceName);
+    if (_serialNumber != '--') await prefs.setString(_lastSnKey, _serialNumber);
+  }
+
+  bool canRestoreBinding(OwnedRecorderBinding binding) =>
+      !_disposed &&
+      !isConnecting &&
+      !_isRecording &&
+      _device != null &&
+      _profile != null &&
+      binding.matches(_serialNumber, _profile!.protocol);
+
+  Future<bool> restoreOwnedBinding(OwnedRecorderBinding binding) async {
+    if (!canRestoreBinding(binding)) {
+      lastErrorMessage = '请先连接目标录音卡取得真实 SN；仅能恢复 SN 和协议均匹配的设备，且需结束录音';
+      return false;
+    }
+    final id = _device!.remoteId.str;
+    final generation = _generation;
+    _restoringIdentity = true;
+    _log('开始恢复与当前卡 SN/协议匹配的自有账号绑定资料');
+    try {
+      await disconnect();
+      _checkGeneration(generation + 1);
+      await binding.saveForDevice(_keyStore, id);
+      _checkGeneration(generation + 1);
+      _hasSharedKey = true;
+      lastErrorMessage = null;
+      _phase = '账号绑定材料已保存，等待设备验证';
+      _log('共享密钥已进入安全存储；尚未报告鉴权成功，下一步重连挑战验证');
+      return true;
+    } catch (error) {
+      lastErrorMessage =
+          error is StateError ? '${error.message}' : '恢复设备绑定资料失败；未报告鉴权成功';
+      _log(lastErrorMessage!);
+      return false;
+    } finally {
+      _restoringIdentity = false;
+      if (!_disposed) _stateChanges.add(null);
+    }
   }
 
   Future<void> _clearSubscriptions() async {
@@ -660,6 +711,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     for (final key in [
       _lastIdKey,
       _lastNameKey,
+      _lastSnKey,
       'sunmate_last_ble_device_id',
       'sunmate_last_ble_device_name'
     ]) {

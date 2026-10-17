@@ -7,6 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sunmate_app/core/ble/ble_constants.dart';
 import 'package:sunmate_app/core/hardware/ainote_6095_driver.dart';
+import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
+import 'yoooclaw_account_test.dart' show record;
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 /// 模拟 GATT 操作与设备异步事件，检查驱动不会把 ATT 成功误当业务成功。
@@ -25,6 +27,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   String replyMethod = 'bindResult';
   Object replySuccess = false;
   bool authenticate = false;
+  String? reportedSn;
 
   @override
   Stream<BmConnectionStateResponse> get onConnectionStateChanged =>
@@ -162,6 +165,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
         'params': authenticate && method == 'getStatus'
             ? {'random': base64Encode(List.generate(32, (i) => i))}
             : {
+                if (reportedSn != null) 'sn': reportedSn,
                 'success': authenticate
                     ? jsonDecode(utf8.decode(request.value.sublist(2)))[
                             'params']['encrypted'] ==
@@ -204,6 +208,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   void reset() {
     writes.clear();
     authenticate = false;
+    reportedSn = null;
     connectCount = 0;
     otaOnly = false;
     rejectNotify = false;
@@ -387,6 +392,30 @@ void main() {
     expect(driver.lastRecordedBytes, isNull);
     await buttons.cancel();
     await audio.cancel();
+  });
+
+  test('own-account restore requires observed SN/profile and verifies on reconnect', () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    final matching = OwnedRecorderBinding.fromAccountRecord(record())!;
+    expect(await driver.restoreOwnedBinding(matching), false);
+    expect(keys.writes, 0);
+    platform.replyMethod = 'verifyRequest';
+    platform.reportedSn = matching.serialNumber;
+    expect(await driver.connectDevice(device), false);
+    final wrong = OwnedRecorderBinding.fromAccountRecord(record(sn: 'AB00000000000002'))!;
+    expect(await driver.restoreOwnedBinding(wrong), false);
+    expect(keys.writes, 0);
+    expect(await driver.restoreOwnedBinding(matching), true);
+    expect(keys.writes, 1);
+    expect(driver.isConnected, false);
+    platform.authenticate = true;
+    expect(await driver.connect(), true);
+    expect(driver.snNumber, matching.serialNumber);
+    expect(driver.diagnosticText, isNot(contains(base64Encode(shared))));
+    matching.clear();
+    wrong.clear();
   });
 
   test('cancel while native connect is pending exits without GATT operations',
