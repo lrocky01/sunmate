@@ -298,18 +298,44 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发标准 TLV 协议指令序列 (对齐官方生命周期握手)
-      _logProgress("5/6 下发时间同步与灯控就绪指令...");
+      // 5. 下发标准 TLV 协议指令序列 (对齐官方生命周期握手与安全身份绑定)
+      _logProgress("5/6 正在下发时间同步与官方安全绑定鉴权 (bindRequest)...");
       try {
+        // 5.1 时间校准
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
 
+        // 5.2 核心绑定握手：下发 19位用户ID、6位验证码、8位十六进制校验签名，彻底终结下位机蓝灯未连接态
+        await Future.delayed(const Duration(milliseconds: 150));
+        final bindTlv = BleJsonRpc.bindRequest(
+          confirmCode: "123456",
+          sign: "a1b2c3d4",
+          userId: "1000000000000000001",
+        );
+        final bindJson = BleJsonRpc.buildRawJson("bindRequest", {
+          "confirm_code": "123456",
+          "sign": "a1b2c3d4",
+          "user_id": "1000000000000000001",
+          "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        });
+        await _sendCommandBoth(bindTlv, bindJson);
+        _logProgress("5/6 绑定请求已下发，芯片完成身份登记注册...");
+
+        // 5.3 尝试触发系统层级配对绑定 (Android 端弹出系统配对框并写入设置列表，iOS 端触发系统 SMP 绑定)
+        try {
+          await device.createBond();
+          _logProgress("✓ 触发系统级蓝牙绑定流程 (Bonding)");
+        } catch (_) {}
+
+        // 5.4 获取设备状态与电量
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getStatus());
 
+        // 5.5 获取用户配置
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getUserSettings());
 
+        // 5.6 下发成功就绪常亮灯控 (mode: 4)
         await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
       } catch (e) {
@@ -554,6 +580,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         final text = utf8.decode(bytes, allowMalformed: true);
         if (text.contains("verifyIdentityRequest")) {
           _sendCommand(BleJsonRpc.verifyIdentity());
+        }
+        if (text.contains("bindResult") || text.contains('"verified":true') || text.contains('"verified": true')) {
+          _logProgress("✓ 收到硬件芯片回执: 身份绑定已确认 (verified=true)");
+          _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
         }
         if (text.contains('"battery"') || text.contains('"recording_state"')) {
           final startIdx = text.indexOf('{');

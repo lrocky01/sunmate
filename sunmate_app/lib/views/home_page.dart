@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.1 (最新版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.2 (身份绑定版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
