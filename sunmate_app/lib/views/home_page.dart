@@ -366,11 +366,16 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   String? _connectingDeviceId;
   String? _connectingDeviceName;
   String? _connectionError;
+  StreamSubscription<String>? _logSub;
 
   @override
   void initState() {
     super.initState();
     _startScan();
+    // 监听底层实时诊断日志，逐行驱动 UI 点亮
+    _logSub = ref.read(deviceProvider.notifier).logStream.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   void _startScan() {
@@ -382,6 +387,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
 
   @override
   void dispose() {
+    _logSub?.cancel();
     FlutterBluePlus.stopScan();
     super.dispose();
   }
@@ -699,13 +705,16 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                   });
 
                                   if (ok) {
-                                    Navigator.of(context).pop();
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text("✓ 已成功连接到 $name！指示灯已就绪"),
-                                        backgroundColor: Colors.green.shade700,
-                                      ),
-                                    );
+                                    await Future.delayed(const Duration(milliseconds: 600));
+                                    if (mounted) {
+                                      Navigator.of(context).pop();
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text("✓ 已成功连接到 $name！指示灯已就绪"),
+                                          backgroundColor: Colors.green.shade700,
+                                        ),
+                                      );
+                                    }
                                   } else {
                                     final err = devNotifier.lastError ?? "连接握手超时";
                                     setState(() {

@@ -131,10 +131,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   final List<String> _connectionLogs = [];
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
+  final _logController = StreamController<String>.broadcast();
+  Stream<String> get logStream => _logController.stream;
 
   void _logProgress(String msg) {
     print("[SunMate BLE] $msg");
     _connectionLogs.add(msg);
+    _logController.add(msg);
     _stateChangeController.add(null);
   }
 
@@ -282,49 +285,28 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发官方鉴权握手与停闪就绪指令序列 (双模兼容：TLV + 纯 JSON 文本)
-      _logProgress("5/5 下发握手协议与灯控就绪指令...");
+      // 5. 下发标准 TLV 协议指令序列 (健康时序间隔 200ms，杜绝裸 JSON 造成的 MCU 溢出崩溃)
+      _logProgress("5/6 下发时间同步与灯控就绪指令...");
       try {
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _sendCommandBoth(
-          BleJsonRpc.bindRequest(),
-          BleJsonRpc.buildRawJson("bindRequest", {
-            "confirm_code": "123456",
-            "sign": "a1b2c3d4",
-            "user_id": "1000000000000000001",
-            "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          }),
-        );
-
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _sendCommandBoth(
-          BleJsonRpc.verifyIdentity(),
-          BleJsonRpc.buildRawJson("verifyIdentity", {
-            "token": "sunmate_auth",
-            "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
-          }),
-        );
-
-        await Future.delayed(const Duration(milliseconds: 100));
+        await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
 
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _sendCommandBoth(
-          BleJsonRpc.getStatus(),
-          BleJsonRpc.buildRawJson("getStatus"),
-        );
+        await Future.delayed(const Duration(milliseconds: 200));
+        await _sendCommand(BleJsonRpc.getStatus());
 
-        // 【核心关停快闪指令】：向硬件下发 lightCtrl(mode: 4, success: true)
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _sendCommandBoth(
-          BleJsonRpc.lightCtrl(mode: 4, success: true),
-          BleJsonRpc.buildRawJson("lightCtrl", {
-            "mode": 4,
-            "success": true,
-          }),
-        );
+        await Future.delayed(const Duration(milliseconds: 200));
+        await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
       } catch (e) {
         print("握手指令序列下发提示: $e");
+      }
+
+      // 6. 关键稳态校验：等待 600ms 确认硬件未主动断开，杜绝草率误报成功
+      _logProgress("6/6 正在校验硬件链路稳定性...");
+      await Future.delayed(const Duration(milliseconds: 600));
+
+      final isStillConnected = device.isConnected;
+      if (!isStillConnected) {
+        throw Exception("硬件在握手后断开连接，请长按录音卡按键 3 秒重置广播配对");
       }
 
       // 标记就绪并持久化记录设备 ID，实现下次启动无感秒连
@@ -332,7 +314,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       await prefs.setString(_prefKeyLastDeviceId, device.remoteId.str);
       await prefs.setString(_prefKeyLastDeviceName, _deviceName);
 
-      _logProgress("✓ 握手完成，硬件指示灯转为常亮就绪！");
+      _logProgress("✓ 握手成功！硬件指示灯已常亮就绪");
       _isConnected = true;
       _stateChangeController.add(null);
       return true;
@@ -603,6 +585,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _buttonEventController.close();
     _audioPacketController.close();
     _stateChangeController.close();
+    _logController.close();
     _audioReceiver.dispose();
   }
 }
