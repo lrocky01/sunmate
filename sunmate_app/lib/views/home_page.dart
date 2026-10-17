@@ -431,7 +431,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             ),
           ),
 
-          // 连接错误提示卡片
+          // 连接错误与诊断日志卡片
           if (_connectionError != null) ...[
             Container(
               margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -441,42 +441,60 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.red.shade300),
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _connectionError!,
-                      style: TextStyle(fontSize: 12, color: Colors.red.shade900, height: 1.3),
-                    ),
+                  Row(
+                    children: [
+                      Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _connectionError!,
+                          style: TextStyle(fontSize: 12, color: Colors.red.shade900, height: 1.3),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _startScan,
+                        child: const Text("重试", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
                   ),
-                  TextButton(
-                    onPressed: _startScan,
-                    child: const Text("重试", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                  ),
+                  if (devNotifier.connectionLogs.isNotEmpty) ...[
+                    const Divider(height: 12),
+                    const Text("底层诊断日志：", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black54)),
+                    const SizedBox(height: 4),
+                    ...devNotifier.connectionLogs.map((log) => Text(
+                          log,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontFamily: 'monospace',
+                            color: log.startsWith("✓") ? Colors.green.shade800 : (log.startsWith("✗") ? Colors.red.shade800 : Colors.black87),
+                          ),
+                        )),
+                  ],
                 ],
               ),
             ),
           ],
 
-          // iOS 系统配对重要提示横幅
+          // 录音卡应用层直连说明横幅
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             padding: const EdgeInsets.all(10),
             decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E1),
+              color: const Color(0xFFF1F8E9),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFFD54F)),
+              border: Border.all(color: const Color(0xFFC8E6C9)),
             ),
             child: const Row(
               children: [
-                Icon(Icons.info_outline, size: 18, color: Color(0xFFE65100)),
+                Icon(Icons.check_circle_outline, size: 18, color: Color(0xFF2E7D32)),
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "重要提示：点击连接后，iOS 系统若弹出【想要与您的 iPhone 配对】，请务必点击【配对】；连接成功后硬件指示灯将常亮就绪。",
-                    style: TextStyle(fontSize: 11, color: Color(0xFFE65100), height: 1.3),
+                    "连接说明：录音卡采用应用层安全直连协议，不占用 iOS 系统设置列表。点击连接后指示灯由快闪转为常亮即为就绪。",
+                    style: TextStyle(fontSize: 11, color: Color(0xFF1B5E20), height: 1.3),
                   ),
                 ),
               ],
@@ -484,33 +502,63 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
           ),
           const Divider(height: 1),
 
-          // 主体内容：正在连接提示 vs 扫描设备列表
+          // 主体内容：正在连接提示 (带实时诊断日志) vs 扫描设备列表
           Expanded(
             child: _isConnecting
                 ? Center(
                     child: Padding(
-                      padding: const EdgeInsets.all(32),
+                      padding: const EdgeInsets.all(24),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           const SizedBox(
-                            width: 52,
-                            height: 52,
+                            width: 48,
+                            height: 48,
                             child: CircularProgressIndicator(
                               strokeWidth: 3,
                               valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF8C00)),
                             ),
                           ),
-                          const SizedBox(height: 20),
+                          const SizedBox(height: 16),
                           Text(
                             "正在连接 ${_connectingDeviceName ?? '录音卡'}...",
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            "已独占蓝牙通道，正在下发鉴权握手与状态同步...\n请留意硬件指示灯由快闪转为常亮",
-                            textAlign: TextAlign.center,
-                            style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
+                          const SizedBox(height: 12),
+                          Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text("实时交互握手状态：",
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey)),
+                                const SizedBox(height: 6),
+                                ...(devNotifier.connectionLogs.isEmpty
+                                        ? ["正在独占蓝牙通道并发起连接..."]
+                                        : devNotifier.connectionLogs)
+                                    .map((log) => Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 2),
+                                          child: Text(
+                                            log,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontFamily: 'monospace',
+                                              color: log.startsWith("✓")
+                                                  ? Colors.green.shade800
+                                                  : (log.startsWith("✗")
+                                                      ? Colors.red.shade800
+                                                      : const Color(0xFF333333)),
+                                            ),
+                                          ),
+                                        )),
+                              ],
+                            ),
                           ),
                         ],
                       ),

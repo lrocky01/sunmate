@@ -129,25 +129,38 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     }
   }
 
+  final List<String> _connectionLogs = [];
+  List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
+
+  void _logProgress(String msg) {
+    print("[SunMate BLE] $msg");
+    _connectionLogs.add(msg);
+    _stateChangeController.add(null);
+  }
+
   /// 连接特定蓝牙外设并执行官方标准的 bindRequest 与 verifyIdentity 鉴权握手
   Future<bool> connectDevice(BluetoothDevice device, {bool isAutoReconnect = false}) async {
     lastErrorMessage = null;
-    try {
-      // 1. 核心防冲突：先彻底停止正在运行的扫描，独占 iOS CoreBluetooth 通道
-      await FlutterBluePlus.stopScan();
+    _connectionLogs.clear();
 
-      // 2. 清理老监听句柄
+    try {
+      _logProgress("1/5 正在独占蓝牙通道并发起物理连接...");
+      await FlutterBluePlus.stopScan();
       await _cleanConnection();
 
-      // 3. 安全连接检查：避免盲目 disconnect 导致外设射频重启
-      final isAlreadyConnected = device.isConnected;
-      if (!isAlreadyConnected) {
-        await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+      // 安全连接：若底层已有连接则宽容处理
+      try {
+        await device.connect(autoConnect: false, timeout: const Duration(seconds: 12));
+      } catch (e) {
+        final err = e.toString().toLowerCase();
+        if (!err.contains("already") && !err.contains("connected")) {
+          rethrow;
+        }
       }
       _connectedDevice = device;
       _deviceName = device.platformName.isNotEmpty ? device.platformName : "AiNote 录音卡";
 
-      // 4. 监听底层连接状态变化
+      _logProgress("2/5 GATT 链路建立成功，监听连接状态...");
       _connectionStateSub = device.connectionState.listen((connState) {
         if (connState == BluetoothConnectionState.disconnected) {
           print("BLE 硬件已断开连接");
@@ -158,78 +171,105 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         }
       });
 
-      // 5. iOS 关键时序：等待 400ms 让蓝牙底层链路与 MTU 协商稳定
+      // iOS 关键时序：等待 400ms 待 ATT/MTU 链路建立稳态
       await Future.delayed(const Duration(milliseconds: 400));
 
-      // 6. 发现所有 GATT 服务
-      final services = await device.discoverServices();
-      await Future.delayed(const Duration(milliseconds: 150));
+      // 发现所有 GATT 服务 (带弹性重试)
+      _logProgress("3/5 正在探测硬件 GATT 服务列表...");
+      List<BluetoothService> services = [];
+      for (int attempt = 1; attempt <= 2; attempt++) {
+        try {
+          services = await device.discoverServices();
+          if (services.isNotEmpty) break;
+        } catch (_) {}
+        await Future.delayed(const Duration(milliseconds: 300));
+      }
 
-      // 7. 全局精准扫描特征值 (标准电池 2A19、私有命令 2B15、事件 2B30、音频 2B31)
+      if (services.isEmpty) {
+        throw Exception("未能发现硬件服务列表，请确认设备未被其它手机连接");
+      }
+
+      final sListSummary = services.map((s) {
+        final str = s.uuid.str.replaceAll("-", "").toLowerCase();
+        return str.length >= 8 ? str.substring(4, 8) : str;
+      }).join(", ");
+      _logProgress("3/5 发现服务列表: [$sListSummary]");
+
+      // 4. 全局精准扫描特征值 (标准电池 2A19、私有命令 2B15、事件 2B30、音频 2B31)
       _cmdChar = null;
       _eventChar = null;
       _audioChar = null;
       _batteryChar = null;
 
+      // 第一轮：精确 UUID 匹配
       for (final service in services) {
         for (final char in service.characteristics) {
           final cleanUuid = char.uuid.str.replaceAll("-", "").toLowerCase();
-
-          // (1) 标准电池服务特征值 (0x2A19)
-          if (cleanUuid.contains("2a19")) {
-            _batteryChar = char;
-          }
-          // (2) 录音卡命令下发特征值 (0x2B15)
-          else if (cleanUuid.contains("2b15")) {
-            _cmdChar = char;
-          }
-          // (3) 录音卡状态/按键/ANCS 事件上报特征值 (0x2B30)
-          else if (cleanUuid.contains("2b30")) {
-            _eventChar = char;
-          }
-          // (4) 录音卡实时 Opus 音频流数据特征值 (0x2B31)
-          else if (cleanUuid.contains("2b31")) {
-            _audioChar = char;
-          }
+          if (cleanUuid.contains("2a19")) _batteryChar = char;
+          if (cleanUuid.contains("2b15")) _cmdChar = char;
+          if (cleanUuid.contains("2b30")) _eventChar = char;
+          if (cleanUuid.contains("2b31")) _audioChar = char;
         }
       }
 
-      // 兜底策略：若部分 OEM 固件未暴露精确 2B15/2B30 UUID，定位非标准私有服务中具备 Write/Notify 特征的通道
+      // 第二轮：智能能力识别 (针对非标准固件/OEM 变种)
       if (_cmdChar == null || _eventChar == null) {
         for (final service in services) {
-          final isStandard = service.uuid.str.toLowerCase().startsWith("000018");
-          if (!isStandard) {
-            for (final char in service.characteristics) {
-              if (_cmdChar == null && (char.properties.write || char.properties.writeWithoutResponse)) {
-                _cmdChar = char;
-              } else if (_eventChar == null && (char.properties.notify || char.properties.indicate)) {
-                _eventChar = char;
-              } else if (_audioChar == null && (char.properties.notify || char.properties.indicate)) {
-                _audioChar = char;
-              }
+          final sUuid = service.uuid.str.replaceAll("-", "").toLowerCase();
+          if (sUuid.startsWith("00001800") || sUuid.startsWith("00001801") || sUuid.startsWith("0000180a")) {
+            continue;
+          }
+          for (final char in service.characteristics) {
+            final props = char.properties;
+            if (_cmdChar == null && (props.write || props.writeWithoutResponse)) {
+              _cmdChar = char;
+            }
+            if (_eventChar == null && (props.notify || props.indicate)) {
+              _eventChar = char;
+            }
+            if (_audioChar == null && (props.notify || props.indicate) && char != _eventChar) {
+              _audioChar = char;
             }
           }
         }
       }
 
-      // 8. 严格校验核心通道：若未发现命令与事件通道，决不误报连接成功
+      // 核心通道校验
       if (_cmdChar == null || _eventChar == null) {
-        throw Exception("未能检测到录音卡核心通道 (2B15/2B30)。请确认硬件已开机并处于可配对状态。");
+        throw Exception("核心通道未就绪 (Cmd=${_cmdChar != null}, Event=${_eventChar != null})。服务列表: [$sListSummary]");
+      }
+      _logProgress("4/5 核心业务通道就绪: Cmd与Event已绑定");
+
+      // 开启事件通道 Notify
+      try {
+        await _eventChar!.setNotifyValue(true);
+        _eventSub = _eventChar!.onValueReceived.listen(_handleEventNotify);
+      } catch (e) {
+        print("开启事件通道监听提示: $e");
       }
 
-      // 9. 读取标准电池服务 (0x2A19)
-      // 【关键机制】：在 iOS 上，主动向外设读取受保护的标准电池特征值，是诱发系统弹出【蓝牙配对请求】弹窗的黄金契机！
+      // 开启音频流通道 Notify
+      if (_audioChar != null) {
+        try {
+          await Future.delayed(const Duration(milliseconds: 100));
+          await _audioChar!.setNotifyValue(true);
+          _audioSub = _audioChar!.onValueReceived.listen((raw) {
+            _audioReceiver.feedBlePacket(Uint8List.fromList(raw));
+          });
+        } catch (e) {
+          print("开启音频流通道监听提示: $e");
+        }
+      }
+
+      // 读取标准电池服务 (0x2A19) - 非阻塞带 1.5 秒超时保护
       if (_batteryChar != null) {
         try {
-          final batteryBytes = await _batteryChar!.read();
+          final batteryBytes = await _batteryChar!.read().timeout(const Duration(milliseconds: 1500));
           if (batteryBytes.isNotEmpty && batteryBytes[0] > 0 && batteryBytes[0] <= 100) {
             _batteryLevel = batteryBytes[0];
-            print("成功读取到硬件标准电量: $_batteryLevel%");
             _stateChangeController.add(null);
           }
-        } catch (e) {
-          print("读取电池特征值提示: $e");
-        }
+        } catch (_) {}
 
         try {
           await _batteryChar!.setNotifyValue(true);
@@ -242,35 +282,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 10. 在 Android 平台尝试主动发起系统级配对 (iOS 系统会自动由特征值访问挑战驱动)
+      // 5. 下发官方鉴权握手与停闪就绪指令序列 (双模兼容：TLV + 纯 JSON 文本)
+      _logProgress("5/5 下发握手协议与灯控就绪指令...");
       try {
-        await device.createBond();
-      } catch (_) {}
-
-      // 11. 开启事件上报通道 Notify (带延时防抖)
-      try {
-        await _eventChar!.setNotifyValue(true);
-        _eventSub = _eventChar!.onValueReceived.listen(_handleEventNotify);
-      } catch (e) {
-        print("开启事件通道监听提示: $e");
-      }
-
-      // 12. 开启实时音频流通道 Notify
-      if (_audioChar != null) {
-        try {
-          await Future.delayed(const Duration(milliseconds: 150));
-          await _audioChar!.setNotifyValue(true);
-          _audioSub = _audioChar!.onValueReceived.listen((raw) {
-            _audioReceiver.feedBlePacket(Uint8List.fromList(raw));
-          });
-        } catch (e) {
-          print("开启音频流通道监听提示: $e");
-        }
-      }
-
-      // 13. 发送官方鉴权握手与停闪就绪指令序列 (双模兼容：TLV + 纯 JSON 文本)
-      try {
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 100));
         await _sendCommandBoth(
           BleJsonRpc.bindRequest(),
           BleJsonRpc.buildRawJson("bindRequest", {
@@ -281,7 +296,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           }),
         );
 
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 100));
         await _sendCommandBoth(
           BleJsonRpc.verifyIdentity(),
           BleJsonRpc.buildRawJson("verifyIdentity", {
@@ -290,18 +305,17 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           }),
         );
 
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 100));
         await syncTime();
 
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 100));
         await _sendCommandBoth(
           BleJsonRpc.getStatus(),
           BleJsonRpc.buildRawJson("getStatus"),
         );
 
         // 【核心关停快闪指令】：向硬件下发 lightCtrl(mode: 4, success: true)
-        // 固件 MCU 接收后立即退出广播快闪状态，指示灯转为就绪常亮！
-        await Future.delayed(const Duration(milliseconds: 150));
+        await Future.delayed(const Duration(milliseconds: 100));
         await _sendCommandBoth(
           BleJsonRpc.lightCtrl(mode: 4, success: true),
           BleJsonRpc.buildRawJson("lightCtrl", {
@@ -313,16 +327,18 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         print("握手指令序列下发提示: $e");
       }
 
-      // 14. 标记就绪并持久化记录设备 ID，实现下次启动无感秒连
+      // 标记就绪并持久化记录设备 ID，实现下次启动无感秒连
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefKeyLastDeviceId, device.remoteId.str);
       await prefs.setString(_prefKeyLastDeviceName, _deviceName);
 
+      _logProgress("✓ 握手完成，硬件指示灯转为常亮就绪！");
       _isConnected = true;
       _stateChangeController.add(null);
       return true;
     } catch (e) {
       lastErrorMessage = e.toString();
+      _logProgress("✗ 连接中断: $e");
       print("连接蓝牙设备出现异常: $e");
       await _cleanConnection();
       _isConnected = false;

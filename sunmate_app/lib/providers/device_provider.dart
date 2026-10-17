@@ -105,6 +105,9 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
   /// 获取最近一次连接失败的真实错误详情
   String? get lastError => _factory.bleDriver.lastErrorMessage;
 
+  /// 获取底层连接全流程诊断日志 (方便在 UI 实时展示)
+  List<String> get connectionLogs => _factory.bleDriver.connectionLogs;
+
   /// 连接指定的蓝牙外设
   Future<bool> connectDevice(BluetoothDevice device) async {
     await stopScan(); // 关键：连接前彻底停止扫描
