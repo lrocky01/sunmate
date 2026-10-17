@@ -4,8 +4,10 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sunmate_app/core/ble/ble_constants.dart';
 import 'package:sunmate_app/core/hardware/ainote_6095_driver.dart';
+import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 /// 模拟 GATT 操作与设备异步事件，检查驱动不会把 ATT 成功误当业务成功。
 final class TestBlePlatform extends FlutterBluePlusPlatform {
@@ -22,6 +24,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   bool holdConnect = false;
   String replyMethod = 'bindResult';
   Object replySuccess = false;
+  bool authenticate = false;
 
   @override
   Stream<BmConnectionStateResponse> get onConnectionStateChanged =>
@@ -148,10 +151,23 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
         success: true,
         errorCode: 0,
         errorString: ''));
-    if (utf8.decode(request.value.sublist(2)).contains('getStatus')) {
+    final method = jsonDecode(utf8.decode(request.value.sublist(2)))['method'];
+    if (method == 'getStatus' || (authenticate && method == 'verifyIdentity')) {
       final payload = utf8.encode(jsonEncode({
-        'method': replyMethod,
-        'params': {'success': replySuccess}
+        'method': authenticate
+            ? (method == 'getStatus'
+                ? 'verifyIdentityRequest'
+                : 'verifyIdentityResult')
+            : replyMethod,
+        'params': authenticate && method == 'getStatus'
+            ? {'random': base64Encode(List.generate(32, (i) => i))}
+            : {
+                'success': authenticate
+                    ? jsonDecode(utf8.decode(request.value.sublist(2)))[
+                            'params']['encrypted'] ==
+                        'AWzzgd9AzLT+5DRwv3vC0DVE6lAp3218tf/EtCRcSY7+tu7AL/fYC9sVh8tjnQEh'
+                    : replySuccess
+              }
       }));
       received.add(BmCharacteristicData(
           remoteId: request.remoteId,
@@ -167,8 +183,27 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
     return true;
   }
 
+  void notify(DeviceIdentifier id, String characteristic, List<int> bytes) {
+    received.add(BmCharacteristicData(
+        remoteId: id,
+        primaryServiceUuid: null,
+        serviceUuid: Guid(BleConstants.serviceOpus),
+        characteristicUuid: Guid(characteristic),
+        instanceId: 0,
+        value: bytes,
+        success: true,
+        errorCode: 0,
+        errorString: ''));
+  }
+
+  void event(DeviceIdentifier id, Map<String, dynamic> value) => notify(
+      id,
+      BleConstants.charDeviceEvent,
+      [0xaa, 0x55, 0x30, 0, 0, ...utf8.encode(jsonEncode(value))]);
+
   void reset() {
     writes.clear();
+    authenticate = false;
     connectCount = 0;
     otaOnly = false;
     rejectNotify = false;
@@ -189,6 +224,7 @@ void main() {
   });
   setUp(() {
     SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
     platform.reset();
     device = BluetoothDevice.fromId(
         '00000000-0000-0000-0000-${(++sequence).toString().padLeft(12, "0")}');
@@ -247,7 +283,7 @@ void main() {
         .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method'])
         .toList();
     expect(methods, isNot(contains('verifyIdentity')));
-    expect(driver.connectionSummary, '等待合法业务鉴权');
+    expect(driver.connectionSummary, '业务鉴权未完成');
   });
 
   test('two calls for same device share one connection operation', () async {
@@ -262,16 +298,95 @@ void main() {
     platform.replySuccess = true;
     expect(await driver.connectDevice(device), false);
     expect(driver.isConnected, false);
-    expect((await SharedPreferences.getInstance()).getString('sunmate_verified_ble_device_id_v2'), isNull);
+    expect(
+        (await SharedPreferences.getInstance())
+            .getString('sunmate_verified_ble_device_id_v2'),
+        isNull);
   });
 
-  test('only explicit boolean identity-success acknowledgement marks ready', () async {
+  test('unsolicited identity-success acknowledgement cannot mark ready',
+      () async {
     platform.replyMethod = 'verifyIdentityResult';
     platform.replySuccess = true;
-    expect(await driver.connectDevice(device), true);
-    expect(driver.isConnected, true);
+    expect(await driver.connectDevice(device), false);
+    expect(driver.isConnected, false);
     await Future<void>.delayed(Duration.zero);
-    expect((await SharedPreferences.getInstance()).getString('sunmate_verified_ble_device_id_v2'), device.remoteId.str);
+    expect(
+        (await SharedPreferences.getInstance())
+            .getString('sunmate_verified_ble_device_id_v2'),
+        isNull);
+  });
+
+  test(
+      'saved real-key protocol completes a challenge round trip without bindRequest',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore()..value = base64Encode(shared);
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.authenticate = true;
+    expect(await driver.connectDevice(device), true);
+    final methods = platform.writes
+        .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method']);
+    expect(methods, contains('verifyIdentity'));
+    expect(methods, isNot(contains('bindRequest')));
+    expect(driver.isConnected, true);
+    expect(driver.diagnosticText, isNot(contains(base64Encode(shared))));
+    expect(driver.diagnosticText, isNot(contains('AWzzgd9AzLT+5DR')));
+  });
+
+  test(
+      'verified hardware voice sessions emit complete Ogg before release; abort discards',
+      () async {
+    await driver.dispose();
+    driver = AiNote6095Driver(
+        keyStore: MemoryKeyStore()..value = base64Encode(shared));
+    platform.authenticate = true;
+    expect(await driver.connectDevice(device), true);
+    final order = <String>[];
+    final collected = <int>[];
+    final buttons = driver.buttonEvents.listen((e) => order.add(e.action.name));
+    final audio = driver.audioStream.listen((e) {
+      order.add('audio');
+      collected.addAll(e.bytes);
+    });
+    platform.event(device.remoteId, {
+      'method': 'voiceCmd',
+      'params': {'event': 'start', 'session_id': 77}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    platform.notify(device.remoteId, BleConstants.charOpusAudioData,
+        [3, 0, 0, 0, 0, 0, 0, 0, 0xf8, 0xff, 0xfe]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    platform.event(device.remoteId, {
+      'method': 'voiceCmd',
+      'params': {'event': 'release', 'session_id': 78}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(driver.isRecording, true); // Wrong session cannot finalize.
+    platform.event(device.remoteId, {
+      'method': 'voiceCmd',
+      'params': {'event': 'release', 'session_id': 77}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(driver.isRecording, false);
+    expect(collected, driver.lastRecordedBytes);
+    expect(order.first, 'pressDown');
+    expect(order.last, 'release');
+    expect(String.fromCharCodes(collected.take(4)), 'OggS');
+    platform.event(device.remoteId, {
+      'method': 'voiceCmd',
+      'params': {'event': 'start', 'session_id': 99}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    platform.event(device.remoteId, {
+      'method': 'voiceCmd',
+      'params': {'event': 'abort', 'session_id': 99}
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(order.last, 'cancel');
+    expect(driver.lastRecordedBytes, isNull);
+    await buttons.cancel();
+    await audio.cancel();
   });
 
   test('cancel while native connect is pending exits without GATT operations',

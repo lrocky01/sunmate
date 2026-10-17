@@ -6,6 +6,7 @@ import '../ble/ble_constants.dart';
 import '../ble/ble_json_rpc.dart';
 import '../ble/ble_protocol.dart';
 import '../ble/ios_ble_connection.dart';
+import '../ble/recorder_authentication.dart';
 import '../audio/opus_stream_receiver.dart';
 import 'hardware_device_driver.dart';
 
@@ -17,6 +18,15 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   static const _ancsKey = 'sunmate_ble_requires_ancs';
   final _ios = IosBleConnection();
   final _audioReceiver = OpusStreamReceiver();
+  final RecorderKeyStore _keyStore;
+  final ManufacturerVerifier? _verifier;
+  RecorderAuthentication? _authentication;
+  Future<void> _eventWork = Future.value();
+  bool _hasSharedKey = false;
+  bool _channelsReady = false;
+  bool _identityVerified = false;
+  bool _sawAuthenticationEvent = false;
+  int? _voiceSession;
   final _buttonEvents = StreamController<DeviceButtonEvent>.broadcast();
   final _audioPackets = StreamController<AudioDataPacket>.broadcast();
   final _stateChanges = StreamController<void>.broadcast();
@@ -24,7 +34,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final List<String> _connectionLogs = [];
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   late final Future<void> _initialization;
-  late final StreamSubscription<OpusAudioPacket> _receiverSub;
+  late final StreamSubscription<Uint8List> _receiverSub;
 
   BluetoothDevice? _device;
   BluetoothCharacteristic? _command;
@@ -51,13 +61,15 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Uint8List? _lastRecordedBytes;
   String? lastErrorMessage;
 
-  AiNote6095Driver() {
+  AiNote6095Driver({RecorderKeyStore? keyStore, ManufacturerVerifier? verifier})
+      : _keyStore = keyStore ?? SecureRecorderKeyStore(),
+        _verifier = verifier {
     _initialization = _loadPreferences();
     _receiverSub = _audioReceiver.audioStream.listen((packet) {
       if (!_isConnected || _disposed) return;
       _audioPackets.add(AudioDataPacket(
-        bytes: packet.opusData,
-        format: AudioEncodingFormat.rawOpus,
+        bytes: packet,
+        format: AudioEncodingFormat.oggOpus,
         timestamp: DateTime.now(),
       ));
     });
@@ -94,7 +106,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.11+12',
+        'SunMate 1.0.12+13',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '协议: ${_profile?.protocol.name ?? "未识别"}',
@@ -174,6 +186,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       lastErrorMessage = null;
       _manualDisconnect = false;
       _isConnected = false;
+      _channelsReady = false;
+      _identityVerified = false;
+      _sawAuthenticationEvent = false;
+      _authentication?.cancel();
+      _eventWork = Future.value();
+      _voiceSession = null;
+      _audioReceiver.cancel();
       _ancsAuthorized = null;
       _serialNumber = '--';
       _batteryLevel = 0;
@@ -226,6 +245,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           _isConnected = false;
           _isRecording = false;
           _isPaused = false;
+          _channelsReady = false;
+          _identityVerified = false;
+          _authentication?.cancel();
+          _cancelVoice();
           _decoder?.reset();
           _phase = '已断开';
           final reason = device.disconnectReason;
@@ -265,6 +288,15 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         throw StateError('未找到唯一完整的已知业务 profile；保留 GATT 日志，不向未知或 OTA 特征写入');
       _profile = profile;
       _decoder = RecorderEventDecoder(profile.protocol);
+      _authentication = RecorderAuthentication(
+        protocol: profile.protocol,
+        deviceId: device.remoteId.str,
+        store: _keyStore,
+        verifier: _verifier,
+      );
+      _hasSharedKey = await _authentication!.loadKey();
+      _checkGeneration(generation);
+      _log('本机合法共享密钥=${_hasSharedKey ? "已保存" : "尚无"}（不输出内容）');
       BluetoothCharacteristic find(String serviceId, String charId) => services
           .firstWhere((s) => BleConstants.normalize(s.uuid.str) == serviceId)
           .characteristics
@@ -282,7 +314,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         throw StateError('业务事件或音频通道不支持订阅');
       }
       _log(
-          '识别 ${profile.protocol.name}；命令=${profile.command} withoutResponse=${profile.withoutResponse}；OTA 排除');
+          '识别 ${profile.protocol.name}；命令=${profile.command} withoutResponse=${profile.withoutResponse}；MTU=${device.mtuNow}；OTA 排除');
       _phase = '订阅设备事件';
       // 先监听再启用 CCCD，避免遗漏订阅瞬间的身份挑战。
       _subscriptions.add(event.onValueReceived.listen((bytes) {
@@ -293,23 +325,38 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _log('设备事件 CCCD 已确认');
       _subscriptions.add(audio.onValueReceived.listen((bytes) {
         if (generation != _generation || !_isConnected) return;
-        // 本版先验证连接；不再把任意事件/音频帧套用旧版自拟四字节头。
-        if (bytes.isNotEmpty) _log('音频通知 ${bytes.length} 字节；帧格式待独立验证');
+        if (_profile?.protocol != RecorderProtocol.telink ||
+            _voiceSession == null) return;
+        try {
+          _audioReceiver.feedBlePacket(Uint8List.fromList(bytes));
+        } on FormatException {
+          _cancelVoice();
+          _log('实时音频分帧失败，已取消该段转写');
+        }
       }));
       await audio.setNotifyValue(true, timeout: 90);
       _checkGeneration(generation);
       _log('音频 CCCD 已确认');
-      _phase = _isConnected ? '设备业务已验证' : '业务待鉴权';
+      _channelsReady = true;
+      _completeAuthenticatedConnection();
+      if (_isConnected) {
+        _phase = '设备业务已验证';
+      } else if (!_sawAuthenticationEvent) {
+        _phase = '业务待鉴权';
+      }
       // 仅发送已确认的能力/状态查询，不能把写入队列成功当设备验证成功。
       await _sendJson(BleJsonRpc.getCapabilities(), 'getCapabilities');
       _checkGeneration(generation);
       if (!_ready!.isCompleted) {
-        if (profile.protocol == RecorderProtocol.telink) {
+        if (profile.protocol == RecorderProtocol.telink &&
+            !_hasSharedKey &&
+            !_sawAuthenticationEvent) {
           await _sendJson(
               BleJsonRpc.bindRequest(
                   DateTime.now().millisecondsSinceEpoch ~/ 1000),
               'bindRequest（无假凭证）');
-        } else {
+        } else if (profile.protocol == RecorderProtocol.aiNote6095 &&
+            !_hasSharedKey) {
           _log('AiNote6095 首次业务绑定需要合法 user_id 和验证材料；本版不伪造');
         }
       }
@@ -406,55 +453,156 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       final message = _decoder?.feed(bytes);
       if (message == null) return;
       final method = message['method'] as String;
+      if (method == 'verifyRequest' || method == 'verifyIdentityRequest') {
+        _sawAuthenticationEvent = true;
+      }
       final safeMethod =
           RegExp(r'^[A-Za-z0-9_]{1,64}$').hasMatch(method) ? method : '未知方法';
       final params = message['params'] is Map
           ? Map<String, dynamic>.from(message['params'] as Map)
           : <String, dynamic>{};
-      _log(
-          '设备事件 method=$safeMethod success=${params["success"] is bool ? params["success"] : "未提供"}');
-      // 只接受设备上报 SN，不再从广告名或 hash 拼造序列号。
-      if (params['sn'] is String &&
-          RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(params['sn'] as String)) {
-        _serialNumber = params['sn'] as String;
-      }
-      if (method == 'verifyRequest' || method == 'verifyIdentityRequest') {
-        lastErrorMessage = method == 'verifyRequest'
-            ? '设备请求厂商业务验证；尚无合法签发材料，未发送伪造签名'
-            : '设备请求共享密钥挑战验证；尚无合法密钥，未发送假 token';
-        _phase = '等待合法业务鉴权';
-        _log(lastErrorMessage!);
-        _finishWaiting(false);
-      } else if (method == 'verifyIdentityResult' &&
-          params['success'] == true) {
-        _isConnected = isLinkConnected;
-        if (_isConnected) {
-          _phase = '设备业务已验证';
-          lastErrorMessage = null;
-          _log('收到明确的 verifyIdentityResult success=true');
-          _finishWaiting(true);
-          unawaited(_rememberVerifiedDevice());
-        }
-      } else if (method == 'bindError' ||
-          (['bindResult', 'pairingResult', 'verifyIdentityResult']
-                  .contains(method) &&
-              params['success'] == false)) {
+      final generation = _generation;
+      _eventWork = _eventWork.then((_) async {
+        if (generation != _generation || _disposed) return;
+        await _handleMessage(method, safeMethod, params, generation);
+      }).catchError((Object error) {
+        if (generation != _generation || _disposed) return;
         _isConnected = false;
-        lastErrorMessage = '设备报告 $safeMethod 失败；请保留日志，不自动清除绑定';
-        _phase = '业务验证失败';
+        _identityVerified = false;
+        _authentication?.cancel();
+        _cancelVoice();
+        _phase = '业务鉴权未完成';
+        lastErrorMessage = _verifier == null && !_hasSharedKey
+            ? '需要自己的官方账号绑定材料或合法厂商验机接口；未发送假凭证'
+            : '业务鉴权失败或设备材料无效；未报告连接成功';
         _log(lastErrorMessage!);
         _finishWaiting(false);
-      } else if (method == 'bindResult' || method == 'pairingResult') {
-        _log('绑定阶段回执不等同于身份验证成功；仍等待完整业务鉴权');
-      } else if (method == 'reportStatus') {
-        final battery = params['battery'];
-        final level = battery is Map ? battery['level'] : battery;
-        if (level is int && level >= 0 && level <= 100) _batteryLevel = level;
-      }
-      _stateChanges.add(null);
+      });
     } on FormatException {
       _log('设备事件帧无效或格式不支持；未将内容当作鉴权回执');
     }
+  }
+
+  Future<void> _handleMessage(String method, String safeMethod,
+      Map<String, dynamic> params, int generation) async {
+    _log(
+        '设备事件 method=$safeMethod success=${params["success"] is bool ? params["success"] : "未提供"}');
+    // 只接受设备上报 SN，不再从广告名或 hash 拼造序列号。
+    if (params['sn'] is String &&
+        RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(params['sn'] as String)) {
+      _serialNumber = params['sn'] as String;
+    }
+    if (method == 'verifyRequest') {
+      _phase = '厂商验机';
+      final reply = await _authentication!.answerManufacturer(params);
+      _checkGeneration(generation);
+      await _sendJson(reply, 'verifyResult（合法验机答复）');
+    } else if (method == 'verifyIdentityRequest') {
+      _phase = '本地共享密钥验证';
+      final reply = await _authentication!.answerIdentity(params,
+          timestampSeconds: DateTime.now().millisecondsSinceEpoch ~/ 1000);
+      _checkGeneration(generation);
+      await _sendJson(reply, 'verifyIdentity（本地挑战应答）');
+    } else if (method == 'verifyIdentityResult' && params['success'] == true) {
+      if (_isConnected &&
+          _authentication?.state == RecorderAuthenticationState.verified) {
+        _log('忽略本次鉴权的重复成功事件');
+        return;
+      }
+      if (!_authentication!.acceptIdentityResult(params['success'])) {
+        _log('忽略未经本次挑战应答的鉴权成功事件');
+        _authentication?.cancel();
+        lastErrorMessage = '缺少本次身份挑战，不能确认设备已通过鉴权';
+        _finishWaiting(false);
+        return;
+      }
+      _identityVerified = true;
+      _completeAuthenticatedConnection();
+    } else if (method == 'bindError' ||
+        (['bindResult', 'pairingResult', 'verifyIdentityResult']
+                .contains(method) &&
+            params['success'] == false)) {
+      _isConnected = false;
+      _identityVerified = false;
+      _authentication?.cancel();
+      _cancelVoice();
+      lastErrorMessage = '设备报告 $safeMethod 失败；请保留日志，不自动清除绑定';
+      _phase = '业务验证失败';
+      _log(lastErrorMessage!);
+      _finishWaiting(false);
+    } else if (method == 'pairingResult' && params['success'] == true) {
+      await _authentication!.acceptPairing(params);
+      _checkGeneration(generation);
+      _hasSharedKey = true;
+      _phase = '共享密钥已保存，等待身份挑战';
+      _log('X25519 协商完成并已安全保存；若设备未再发挑战，请重连验证');
+    } else if (method == 'bindResult') {
+      _log('绑定阶段回执不等同于身份验证成功；仍等待完整业务鉴权');
+    } else if (method == 'voiceCmd' &&
+        _isConnected &&
+        _profile?.protocol == RecorderProtocol.telink) {
+      _handleVoiceCommand(params);
+    } else if (method == 'reportStatus') {
+      final battery = params['battery'];
+      final level = battery is Map ? battery['level'] : battery;
+      if (level is int && level >= 0 && level <= 100) _batteryLevel = level;
+    }
+    _stateChanges.add(null);
+  }
+
+  void _completeAuthenticatedConnection() {
+    if (!_identityVerified ||
+        !_channelsReady ||
+        !isLinkConnected ||
+        _isConnected) return;
+    _isConnected = true;
+    _phase = '设备业务已验证';
+    lastErrorMessage = null;
+    _log('本次身份挑战验证成功，事件和音频通道均已确认');
+    _finishWaiting(true);
+    unawaited(_rememberVerifiedDevice());
+    unawaited(syncTime());
+  }
+
+  void _handleVoiceCommand(Map<String, dynamic> params) {
+    final session = params['session_id'];
+    if (session is! int || session <= 0) return;
+    if (params['event'] == 'start') {
+      if (_voiceSession == session) return;
+      _cancelVoice();
+      _voiceSession = session;
+      _isRecording = true;
+      _lastRecordedBytes = null;
+      _buttonEvents.add(
+          DeviceButtonEvent(buttonId: 1, action: ButtonActionType.pressDown));
+      _audioReceiver.startCollecting(sessionId: session);
+      _log('硬件实时录音开始 session=$session');
+    } else if (_voiceSession == session && params['event'] == 'release') {
+      try {
+        _lastRecordedBytes = _audioReceiver.stopAndExport();
+        _isRecording = false;
+        _voiceSession = null;
+        _buttonEvents.add(
+            DeviceButtonEvent(buttonId: 1, action: ButtonActionType.release));
+        _log('实时录音封装完成 bytes=${_lastRecordedBytes!.length}');
+      } on FormatException {
+        _cancelVoice();
+        _log('音频为空或截断，已取消转写');
+      }
+    } else if (_voiceSession == session && params['event'] == 'abort') {
+      _cancelVoice();
+      _log('设备取消了本段实时录音');
+    }
+  }
+
+  void _cancelVoice() {
+    if (_voiceSession != null && !_disposed) {
+      _buttonEvents
+          .add(DeviceButtonEvent(buttonId: 1, action: ButtonActionType.cancel));
+    }
+    _audioReceiver.cancel();
+    _voiceSession = null;
+    _isRecording = false;
   }
 
   Future<void> _rememberVerifiedDevice() async {
@@ -481,6 +629,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<void> disconnect() async {
     _manualDisconnect = true;
     ++_generation;
+    _authentication?.cancel();
+    _cancelVoice();
     _finishWaiting(false);
     _phase = '用户取消连接';
     _log('已请求断开；不会清除系统 bond 或恢复出厂');
@@ -518,9 +668,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _log('已清除 App 保存的设备 ID；系统配对请在 iPhone 设置中管理');
   }
 
-  // 本轮只验证连接与鉴权；不沿用未经证实的录音 JSON 或音频帧格式。
+  // Telink 实时录音由硬件 voiceCmd 启停，不捏造 App 录音命令。
   bool _recordingUnavailable() {
-    lastErrorMessage = '录音需业务鉴权和音频帧验证完成后启用；当前 $_phase';
+    lastErrorMessage = !_isConnected
+        ? '录音需要先完成设备业务鉴权；当前 $_phase'
+        : '请使用录音卡物理按键开始和结束实时录音；尚未核实该设备的 App 主动录音控制';
     _log(lastErrorMessage!);
     return false;
   }

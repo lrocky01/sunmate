@@ -1,8 +1,8 @@
 # SunMate 已核对的录音卡 BLE 协议
 
-2026-10-17 修订，适用于 1.0.11+12。此前版本混合了 Telink 与 AiNote6095，并把 OTA 端点误作业务命令，已撤回。完整取证过程见 [审查报告](docs/IOS_BLE_AUDIT_2026-10-17.md)。
+2026-10-17 修订，已交付安装包为 1.0.11+12，本地鉴权与音频候选源码为 1.0.12+13（尚未发布）。此前版本混合了 Telink 与 AiNote6095，并把 OTA 端点误作业务命令，已撤回。完整取证过程见 [审查报告](docs/IOS_BLE_AUDIT_2026-10-17.md)。
 
-本规范来自指定 YoooClaw 2.3.0 APK 的静态实现，尚不能替代 C·ONE-4552 真机 GATT 和抓包验证。型号名称不能决定 profile；只按完整服务与特征组合选择，未知或同时匹配多个 profile 时不写入。
+本规范来自指定 YoooClaw 2.3.0 APK 的静态实现，用户真机日志已经确认 C·ONE-4552 的 Telink GATT 与 verifyRequest；密码流程仍需真实材料与抓包验证。型号名称不能决定 profile；只按完整服务与特征组合选择，未知或同时匹配多个 profile 时不写入。
 
 ## Telink
 
@@ -48,11 +48,13 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 系统 SMP/bond、ANCS 授权与厂商业务鉴权分别记录。Apple 公开连接选项 `CBConnectPeripheralOptionRequiresANCS` 在现有 CBCentralManager 上设置，结果由 `ancsAuthorized` 及授权变化回调读取。不能将其解释为通用 requestPairing，也不保证任意固件出现两个弹窗。
 
-厂商 `verifyRequest` 路径涉及签发验证材料，`verifyIdentityRequest` 路径需要已协商的真实共享密钥。当前测试版没有此密钥接入，收到挑战时明确显示等待合法业务鉴权，不发送假 token、假签名或本地伪造 user_id。
+厂商 `verifyRequest` 路径将 encrypted/mac/sn 提交至官方 `/api/device/toc/externalDeviceBind/check`，使用返回的 hmac 构造 verifyResult，并交换 32 字节原始 X25519 公钥。共享密钥直接取 X25519 结果，无已观察到的 HKDF。`verifyIdentityRequest.params.random` 先 Base64 解码，用共享密钥做 AES-256-CBC、16 字节全零 IV、PKCS7 填充，再将密文 Base64 放入 verifyIdentity.params.encrypted；Telink 不附 timestamp。
 
-`bindResult`/`pairingResult` 不是完整业务验证成功；`success:false` 必须失败。仅收到明确的 `verifyIdentityResult` 且 `params.success` 为布尔 true 时记录设备报告的业务验证成功。写队列完成、物理连接仍在、灯亮、ANCS 允许都不是替代条件。
+官方账号的设备列表存在 extInfo.sharedSecret 恢复路径，但正常账号授权入口尚未接通。1.0.12+13 候选源码已实现上述本地算法、鉴权状态机和安全保存；默认没有签发 provider 或已有密钥时明确失败，不发送假 token、假签名或伪造 user_id。
 
-本版没有确认 `setAncsConfig`、自定义 ANCS 事件码和旧四字节 Opus 音频头，不再自动使用这些假设。录音与音频导出保留 HAL 接口，在格式与鉴权未验证前返回明确的不可用状态，避免向私有 ASR 发送误解包的数据。
+`bindResult`/`pairingResult` 不是完整业务验证成功；`success:false` 必须失败。仅在本次挑战应答之后收到 `verifyIdentityResult` 且 `params.success` 为布尔 true，并完成事件和音频通道初始化，才记录业务验证成功。写队列完成、物理连接仍在、灯亮、ANCS 允许都不是替代条件。
+
+未确认 `setAncsConfig` 或自定义 ANCS 事件码，不发送这些指令。Telink 实时音频通过 voiceCmd 的 start/release/abort 和 session_id 控制。流内容使用两个 uint32 长度字段（Opus 长度、扩展长度），再跟 Opus 与扩展数据，可跨通知；优先 LE，否则按官方 plausibility 规则尝试 BE，单段长度各不超过 8192。不是旧四字节 session/seq 头。候选实现输出单声道 Ogg/Opus，输入采样率 16000、pre-skip 312、每包 granule 增量 960；空、截断、取消的会话不提交转写。长录音与 App 主动开始/暂停/恢复仍未核实，不假造命令。
 
 ## 诊断与真机测试
 

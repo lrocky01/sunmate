@@ -21,6 +21,7 @@ enum ButtonActionType {
   doubleClick,  // 双击
   tripleClick,  // 三击
   longPress,    // 长按触发
+  cancel,       // 设备取消或链路中断；不能提交未完成的音频
 }
 
 /// 统一按键事件
@@ -44,6 +45,7 @@ enum AudioEncodingFormat {
   rawOpus, // 16kHz Opus (AiNote 6095 蓝牙卡默认)
   pcm16Bit, // 线性 PCM 16bit 16kHz (手机麦克风或解压后数据)
   aac,      // 预留格式
+  oggOpus,  // 已封装的 Ogg/Opus 流，可提交私有 ASR
 }
 
 /// 统一音频数据包

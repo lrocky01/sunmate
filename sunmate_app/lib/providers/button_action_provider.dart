@@ -76,6 +76,11 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
           _executeAction(state.longPress);
         }
         break;
+      case ButtonActionType.cancel:
+        _isCollectingVoice = false;
+        _recordedBuffer.clear();
+        _ref.read(chatProvider.notifier).setListeningState(false);
+        break;
     }
   }
 

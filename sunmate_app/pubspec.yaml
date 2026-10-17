@@ -1,7 +1,7 @@
 name: sunmate_app
 description: "SunMate（阳光智伴）- 伴随式第二大脑与成长智能体 (Flutter 跨平台)"
 publish_to: "none"
-version: 1.0.11+12
+version: 1.0.12+13
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -12,6 +12,8 @@ dependencies:
   cupertino_icons: ^1.0.6
   flutter_blue_plus: 1.36.8
   flutter_riverpod: ^2.5.1
+  cryptography: 2.7.0
+  flutter_secure_storage: 9.2.4
   dio: ^5.4.3
   intl: ^0.19.0
   shared_preferences: ^2.2.3

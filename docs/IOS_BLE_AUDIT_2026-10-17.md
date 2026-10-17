@@ -147,3 +147,40 @@ Info.plist 已包含蓝牙说明与 bluetooth-central 后台模式，没有证�
 - REA CLI 使用工作区已有 JDK/JADX 成功检查原 APK 和重建容器中的指定方法，未改 MCP 配置、未安装新工具。
 - 已审查连接调用链、HAL、iOS 入口、plist、依赖和构建工作流；未执行 App 构建或 Flutter 分析，因为当前 PATH 无 Flutter/Dart，本机只配置 Xcode CommandLineTools。
 - 尚无本次 iPhone GATT/HCI 日志与官方 iOS IPA；未进行硬件发包、配对或端到端稳定性验证。
+
+## 续查：真实业务鉴权与实时录音（1.0.12+13 源码候选）
+
+### 真机已经把断点缩小到业务验机
+
+用户提供的 1.0.11+12 日志证实：完整 Telink `1930/2b30/2b31/2b32/2b33` 存在，事件和音频 CCCD 均成功；连接约 1634ms 时收到 `verifyRequest`，约 7672ms 时断开，iOS 报 `CBErrorDomain` code 7，`ANCS=true`。因此现在有直接设备证据支持该 profile，当前缺口是验机答复。`ANCS=true` 可以是此前官方 App 已授予的授权，不能据此证明 SunMate 本轮弹出了新的系统窗口；code 7 也不能直接换算为 HCI 的远端终止原因或证明固件看门狗实现。
+
+### 已定位的三段身份流程
+
+1. 首次验机：`BleDeviceEventHandler.handle(VerificationRequested)` 将设备上报的 `encrypted/mac/sn` 分别作为 `checkContent/mac/sn`，调用 `POST /api/device/toc/externalDeviceBind/check`。`BleApiService` 声明了该路径；`BaseRetrofitFactory` 为正常业务请求添加账号 Authorization、UserId 等信息。服务端返回的 `ExternalDeviceBindResult.hmac` 经非空检查后，作为 `verifyResult.params.encrypted_random` 发给设备，同时携带本机 X25519 原始公钥的 Base64。Telink profile 的 `verifyResultIsIosValue=null`，因此不额外编造 `isIos`。HMAC 的具体计算及服务端密钥没有从这些调用中恢复；不能用账号密码、SN 或自造 token 代替。
+2. 共享密钥：`SecretManager.generateSharedSecret` 接收 `pairingResult.public_key` 的原始 32 字节 X25519 公钥，与本机私钥做 X25519，直接得到 32 字节共享密钥，所见路径未使用 HKDF。官方手机密钥对在进程内懒生成，业务共享密钥随后保存在 `BleSavedDevice.key`。手机公钥发出到 `pairingResult` 之间中断的恢复，仍需按实际固件行为验证。
+3. 重连：`verifyIdentityRequest.params.random` 是 Base64 挑战；共享密钥为 AES-256 key，IV 为 16 个零字节，算法 `AES/CBC/PKCS5Padding`（AES 分组对应 PKCS7），加密结果 Base64 放进 `verifyIdentity.params.encrypted`。Telink 不带 timestamp；AiNote6095 重连编码带秒级时间戳字符串。只有本次挑战应答之后的布尔 `verifyIdentityResult.success=true`，且通道初始化已完成，才能报告业务就绪。
+
+### 自有官方账号恢复绑定：发现路径，但尚未接通
+
+官方不只在本机保存共享密钥。`POST /api/device/toc/externalDeviceBind/bind` 的 `ExtInfo` 包含 `mac/sharedSecret/uuid`；`POST /api/device/toc/homePage/pub/index` 返回 `BleHomePageBean.deviceList`，其中每项含 `externalDeviceId/externalDeviceName/deviceType/extInfo`。`BleDeviceStore` 的账号同步回调读取 `extInfo.sharedSecret` 并构造 `BleSavedDevice`。这说明官方已有“从自己的账号恢复既有设备身份”的客户端路径，是避免重新绑定的优先方向。
+
+REA 对 `BleDeviceStore$$ExternalSyntheticLambda6.invoke` 的补充结果保存于忽略目录 `tools/ble_audit/rea-owned-device-sync.json`，Evidence `ev_83133406815da5003ca038190f86ed3407abded959915c0d8d8f9fe32802e719`。它是重建分析副本上的静态证据，不能证明当前服务器一定返回可用密钥、用户账号有该设备记录、API Key 有相应权限，或 iOS 已绑定的设备会接受跨客户端恢复。
+
+用户目前只有自己的官方 App 账号，没有 SDK 授权。尚未取得合法可用的账号会话或设备资料导出入口，也未对真实账号发起登录、验证码、验机、绑定或解绑请求。不能声称账号同步已经实现或真机鉴权已通过。
+
+登录仍有分析盲区：账号 API 接口可见 `sendLoginSms/loginOrRegister`，但部分调用者的 DEX code_item 指令已被保护器清零。直接检查重建副本中 `LoginCodeInputActivity.initListener` 的 code_item（0x6aae20，65 条指令），指令区为零；所有 4096 字节之后的内容与原包保持一致，所以这不是本次 DEX 头重建丢失的代码。不能根据空 Java 方法或零条静态引用推断登录参数、服务器免鉴权或原 APK 没有实现。原包还含 `libnesec.so/assets/nedata.db`；未解开这部分保护，也未执行 APK 采集登录运行时。已有 API Key 或导出入口是否可用，需用户确认，不要求在聊天发送凭据。
+
+### 已落地的本地部分与边界
+
+- `recorder_authentication.dart`：X25519 / AES 挑战应答、严格鉴权状态机、取消后禁止晚到的答复发包；共享密钥使用 iOS Keychain（ThisDeviceOnly）或 Android KeyStore 保护的安全存储。增加 `cryptography 2.7.0` 与 `flutter_secure_storage 9.2.4`，不是自写密码算法。默认没有厂商验机 provider，不会假装调用成功；账号同步入口尚未接入，所以当前安装不能凭空获得已有官方共享密钥。
+- 驱动按真实保存密钥跳过 `bindRequest`，响应设备随机挑战；没有材料则保持失败/待鉴权。新增 provider 只是合法签发层的接缝，不是已实现的官方登录服务；AiNote6095 的 iOS 首次绑定参数不明，明确拒绝尝试。
+- 音频：官方 `TelinkProtocolAdapter` 在 `voiceCmd start` 后把 stream 通知原样交给 `BleStreamReceiver`；`OpusFrameAssembler` 使用两个 uint32 长度（Opus 长度与扩展长度），优先 LE、否则 BE，跨通知组帧。每段长度上限 8192，与旧自拟四字节 session/seq 头不同。官方 `nativeCreate` 参数为 1 声道、16000Hz、pre-skip 312；`nativeWritePacket` 的 granule 增量 960。对应实现已替换旧接收器，生成带 CRC 的 Ogg/Opus，物理按键 `start/release` 会话才采集，`abort`、断线或空/截断帧取消转写。
+- 保留 HAL 的 `AiNote6095Driver/PhoneMicDriver`。对 Telink 的 App 主动开始/暂停/恢复录音，官方 adapter 对应方法没有可用编码，继续明确提示使用物理按键；没有发明远程录音指令。长录音、文件下载与 AiNote6095 音频不在本次已验证实现内。
+- MOSS-ASR / Hermes 客户端、私有端点及路由未改；没有新增厂商音频上传或第三方中转。
+- 源码版本与可见版本更新为 `1.0.12+13`。这是待完成账号材料接入的源码候选，尚非新的可安装 IPA，也没有推送 main 冒充完整修复。已交付的 IPA 仍为 1.0.11+12。
+
+### 验证与后续终点
+
+已用 RFC 7748 公开向量核对 X25519，用独立 OpenSSL 结果核对 AES-CBC 填充；模拟 GATT 已走通“预存密钥→随机挑战→真实算法应答→成功回执”的流程，验证不再发 bindRequest；生成的 Ogg/Opus 已用本机 FFmpeg 解码。测试向量及模拟服务只在 test/ 内，不能被当作真实设备材料。本次最终测试结果记录于 docs/todo.md。
+
+下一步必须先取得用户自有账号的正常授权接入或真实设备绑定资料，验证恢复接口与目标设备身份匹配，再将材料写入安全存储；若只能首次绑定，则接上合法厂商验机服务。随后在实体 iPhone 验证鉴权成功、至少 10 分钟稳定连接、重复重连、物理按键完整录音及私有 ASR 转写。未达到这些条件前，整体任务仍未完成。
