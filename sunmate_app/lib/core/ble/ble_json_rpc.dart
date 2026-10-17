@@ -29,6 +29,9 @@ class BleJsonRpc {
   // 2. 获取设备当前状态 (电量, 存储, 是否在录音)
   static Uint8List getStatus() => buildRequest(0x0002, "getStatus");
 
+  // 2.1 获取用户设置 (指示灯与按键模式)
+  static Uint8List getUserSettings() => buildRequest(0x0002, "getUserSettings");
+
   // 3. 开始录音 (携带时间戳与可选录音场景)
   static Uint8List startRecord({String? scene}) {
     return buildRequest(0x0010, "startRecord", {

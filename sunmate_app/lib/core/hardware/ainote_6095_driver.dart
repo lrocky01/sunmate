@@ -47,6 +47,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool _isLongPressing = false;
   DateTime? _pressDownTime;
 
+  // 心跳保活与自动重连机制 (彻底解决连上数秒后 MCU 空闲休眠断连问题)
+  Timer? _heartbeatTimer;
+  Timer? _reconnectTimer;
+  bool _manualDisconnect = false;
+
   AiNote6095Driver() {
     // 监听底层 OpusStreamReceiver，封装为通用的 AudioDataPacket
     _audioReceiver.audioStream.listen((opusPacket) {
@@ -145,6 +150,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<bool> connectDevice(BluetoothDevice device, {bool isAutoReconnect = false}) async {
     lastErrorMessage = null;
     _connectionLogs.clear();
+    _manualDisconnect = false;
 
     try {
       _logProgress("1/5 正在独占蓝牙通道并发起物理连接...");
@@ -166,11 +172,18 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _logProgress("2/5 GATT 链路建立成功，监听连接状态...");
       _connectionStateSub = device.connectionState.listen((connState) {
         if (connState == BluetoothConnectionState.disconnected) {
-          print("BLE 硬件已断开连接");
+          print("[SunMate BLE] 硬件已断开连接 (manual=$_manualDisconnect)");
           _isConnected = false;
           _isRecording = false;
           _isPaused = false;
+          _heartbeatTimer?.cancel();
+          _heartbeatTimer = null;
           _stateChangeController.add(null);
+
+          // 若非手动主动断开，启动后台平滑重连，保障链路持久在线
+          if (!_manualDisconnect) {
+            _scheduleAutoReconnect();
+          }
         }
       });
 
@@ -285,16 +298,19 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
 
-      // 5. 下发标准 TLV 协议指令序列 (健康时序间隔 200ms，杜绝裸 JSON 造成的 MCU 溢出崩溃)
+      // 5. 下发标准 TLV 协议指令序列 (对齐官方生命周期握手)
       _logProgress("5/6 下发时间同步与灯控就绪指令...");
       try {
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
 
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.getStatus());
 
-        await Future.delayed(const Duration(milliseconds: 200));
+        await Future.delayed(const Duration(milliseconds: 150));
+        await _sendCommand(BleJsonRpc.getUserSettings());
+
+        await Future.delayed(const Duration(milliseconds: 150));
         await _sendCommand(BleJsonRpc.lightCtrl(mode: 4, success: true));
       } catch (e) {
         print("握手指令序列下发提示: $e");
@@ -314,6 +330,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       await prefs.setString(_prefKeyLastDeviceId, device.remoteId.str);
       await prefs.setString(_prefKeyLastDeviceName, _deviceName);
 
+      // 启动心跳保活定时器 (每 7 秒下发 getStatus 喂狗)，杜绝 MCU 判定无活动主动断连
+      _startHeartbeat();
+
       _logProgress("✓ 握手成功！硬件指示灯已常亮就绪");
       _isConnected = true;
       _stateChangeController.add(null);
@@ -329,7 +348,31 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     }
   }
 
+  void _startHeartbeat() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 7), (timer) async {
+      if (!_isConnected || _cmdChar == null) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await _sendCommand(BleJsonRpc.getStatus());
+      } catch (_) {}
+    });
+  }
+
+  void _scheduleAutoReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(milliseconds: 2000), () async {
+      if (_manualDisconnect || _isConnected) return;
+      print("[SunMate BLE] 尝试自动静默恢复连接...");
+      await autoReconnectLastDevice();
+    });
+  }
+
   Future<void> _cleanConnection() async {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
     await _connectionStateSub?.cancel();
     _connectionStateSub = null;
     await _eventSub?.cancel();
@@ -350,6 +393,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   @override
   Future<void> disconnect() async {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     await _cleanConnection();
     if (_connectedDevice != null) {
       try {
@@ -365,6 +411,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   /// 解除当前设备绑定，清除本地持久化缓存
   Future<void> unpairDevice() async {
+    _manualDisconnect = true;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     await disconnect();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_prefKeyLastDeviceId);

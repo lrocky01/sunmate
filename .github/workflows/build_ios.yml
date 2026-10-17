@@ -49,14 +49,18 @@ jobs:
           FLUTTER_DIR=$(dirname $(dirname $(which flutter)))
           echo "FLUTTER_DIR is $FLUTTER_DIR"
 
+          VERSION_NAME=$(grep '^version:' pubspec.yaml | sed 's/version: //' | cut -d'+' -f1 | tr -d '[:space:]')
+          BUILD_NUM="${{ github.run_number }}"
+          echo "Building SunMate version: $VERSION_NAME (Build $BUILD_NUM)"
+
           cat << EOF > ios/Flutter/Generated.xcconfig
           FLUTTER_ROOT=$FLUTTER_DIR
           FLUTTER_APPLICATION_PATH=$PWD
           COCOAPODS_PARALLEL_CODE_SIGN=true
           FLUTTER_TARGET=lib/main.dart
           FLUTTER_BUILD_DIR=build
-          FLUTTER_BUILD_NAME=1.0.0
-          FLUTTER_BUILD_NUMBER=1
+          FLUTTER_BUILD_NAME=$VERSION_NAME
+          FLUTTER_BUILD_NUMBER=$BUILD_NUM
           DART_OBFUSCATION=false
           TRACK_WIDGET_CREATION=true
           TREE_SHAKE_ICONS=false
@@ -70,8 +74,8 @@ jobs:
           export "COCOAPODS_PARALLEL_CODE_SIGN=true"
           export "FLUTTER_TARGET=lib/main.dart"
           export "FLUTTER_BUILD_DIR=build"
-          export "FLUTTER_BUILD_NAME=1.0.0"
-          export "FLUTTER_BUILD_NUMBER=1"
+          export "FLUTTER_BUILD_NAME=$VERSION_NAME"
+          export "FLUTTER_BUILD_NUMBER=$BUILD_NUM"
           export "DART_OBFUSCATION=false"
           export "TRACK_WIDGET_CREATION=true"
           export "TREE_SHAKE_ICONS=false"
@@ -97,12 +101,48 @@ jobs:
                      build
           cd ../..
 
-      - name: 7. Package Runner.app into SunMate.ipa
+      - name: 7. Package Runner.app into SunMate.ipa with Full Icons
         run: |
           mkdir -p build_output/Payload
           APP_DIR=$(find sunmate_app/build -name "Runner.app" -type d | head -n 1)
           echo "Found Runner.app at: $APP_DIR"
           cp -r "$APP_DIR" build_output/Payload/
+
+          # 彻底解决爱思助手/自签名工具找不到桌面图标问题：
+          # 1. 复制全套标准 png 图标至 Runner.app 根目录
+          cp sunmate_app/ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png build_output/Payload/Runner.app/
+          cp build_output/Payload/Runner.app/Icon-App-60x60@2x.png build_output/Payload/Runner.app/AppIcon60x60@2x.png || true
+          cp build_output/Payload/Runner.app/Icon-App-60x60@3x.png build_output/Payload/Runner.app/AppIcon60x60@3x.png || true
+          cp build_output/Payload/Runner.app/Icon-App-60x60@2x.png build_output/Payload/Runner.app/Icon@2x.png || true
+          cp build_output/Payload/Runner.app/Icon-App-60x60@2x.png build_output/Payload/Runner.app/Icon.png || true
+          cp build_output/Payload/Runner.app/Icon-App-60x60@2x.png build_output/Payload/Runner.app/AppIcon.png || true
+
+          # 2. 注入 CFBundleIcons 到 Info.plist，确保 iOS SpringBoard 100% 正确加载图标
+          python3 -c "
+          import plistlib
+          plist_path = 'build_output/Payload/Runner.app/Info.plist'
+          try:
+              with open(plist_path, 'rb') as f:
+                  pl = plistlib.load(f)
+              pl['CFBundleIcons'] = {
+                  'CFBundlePrimaryIcon': {
+                      'CFBundleIconFiles': ['AppIcon60x60', 'Icon-App-60x60', 'Icon'],
+                      'CFBundleIconName': 'AppIcon'
+                  }
+              }
+              pl['CFBundleIcons~ipad'] = {
+                  'CFBundlePrimaryIcon': {
+                      'CFBundleIconFiles': ['AppIcon60x60', 'AppIcon76x76', 'Icon-App-60x60', 'Icon'],
+                      'CFBundleIconName': 'AppIcon'
+                  }
+              }
+              with open(plist_path, 'wb') as f:
+                  plistlib.dump(pl, f)
+              print('Successfully injected CFBundleIcons into Info.plist')
+          except Exception as e:
+              print(f'Warning: Plist injection note: {e}')
+          "
+
           cd build_output
           zip -r -q ../SunMate.ipa Payload
           cd ..

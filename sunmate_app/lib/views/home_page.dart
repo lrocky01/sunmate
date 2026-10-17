@@ -18,7 +18,13 @@ class HomePage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text("SunMate 阳光智伴"),
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+            Text("v1.0.1 (最新版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -700,18 +706,14 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                 final ok = await devNotifier.connectDevice(item.device);
 
                                 if (mounted) {
-                                  setState(() {
-                                    _isConnecting = false;
-                                    _connectingDeviceId = null;
-                                  });
-
                                   if (ok) {
-                                    await Future.delayed(const Duration(milliseconds: 600));
+                                    // 成功时保持就绪状态展示 500ms，直接平滑退出弹窗，杜绝跳回扫描列表的视觉闪烁
+                                    await Future.delayed(const Duration(milliseconds: 500));
                                     if (mounted) {
                                       Navigator.of(context).pop();
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         SnackBar(
-                                          content: Text("✓ 已成功连接到 $name！指示灯已就绪"),
+                                          content: Text("✓ 已成功连接到 $name！指示灯常亮就绪"),
                                           backgroundColor: Colors.green.shade700,
                                         ),
                                       );
@@ -719,6 +721,8 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                   } else {
                                     final err = devNotifier.lastError ?? "连接握手超时";
                                     setState(() {
+                                      _isConnecting = false;
+                                      _connectingDeviceId = null;
                                       _connectionError = "连接未完成: $err\n请靠近录音卡或长按按键 3 秒进入配对状态后重试";
                                     });
                                   }
