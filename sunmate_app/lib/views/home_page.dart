@@ -84,9 +84,13 @@ class HomePage extends ConsumerWidget {
                         _StatusIndicator(
                           icon: Icons.battery_charging_full,
                           label: "电量",
-                          value: device.isConnected ? "${device.batteryLevel}%" : "--",
+                          value: device.isConnected
+                              ? (device.batteryLevel > 0 ? "${device.batteryLevel}%" : "读取中...")
+                              : "--",
                           color: device.isConnected
-                              ? (device.batteryLevel > 20 ? Colors.green : Colors.red)
+                              ? (device.batteryLevel > 20
+                                  ? Colors.green
+                                  : (device.batteryLevel > 0 ? Colors.red : Colors.orange))
                               : Colors.grey,
                         ),
                         _StatusIndicator(
