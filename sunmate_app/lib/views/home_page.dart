@@ -22,7 +22,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.6 (稳定直连与就绪守护版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.7 (硬件解绑指引与SN全息版) · 伴随式第二大脑", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -68,12 +68,24 @@ class HomePage extends ConsumerWidget {
                                 device.isConnected ? device.deviceName : "未连接随身设备",
                                 style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
                               ),
-                              const SizedBox(height: 4),
+                              if (device.snNumber.isNotEmpty && device.snNumber != "--") ...[
+                                const SizedBox(height: 2),
+                                Text(
+                                  "SN: ${device.snNumber}",
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                    color: Colors.black54,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 2),
                               Text(
                                 device.isConnected
                                     ? (activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
                                         ? "原生麦克风就绪 (无外设模式)"
-                                        : "蓝牙卡连接正常 (GATT 已就绪)")
+                                        : "蓝牙卡连接正常 (GATT 直连已就绪)")
                                     : "设备待连接 (可一键切换为手机麦克风)",
                                 style: TextStyle(
                                   color: device.isConnected ? Colors.green.shade700 : Colors.grey,
@@ -522,24 +534,32 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             ),
           ],
 
-          // 纯净直连说明横幅
+          // 纯净直连与硬件解绑指引横幅
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            padding: const EdgeInsets.all(10),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: const Color(0xFFE8F5E9),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFA5D6A7)),
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFFFE082)),
             ),
-            child: const Row(
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.check_circle_outline, size: 20, color: Color(0xFF2E7D32)),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    "连接说明：C·ONE 录音卡采用 iOS 原生应用层低功耗蓝牙 (BLE) 高速直连。点击连接后硬件指示灯常亮就绪，无需依赖系统设置配对即可稳定使用。",
-                    style: TextStyle(fontSize: 11, color: Color(0xFF1B5E20), height: 1.35, fontWeight: FontWeight.w500),
-                  ),
+                Row(
+                  children: [
+                    Icon(Icons.lightbulb_outline, size: 18, color: Color(0xFFF57F17)),
+                    SizedBox(width: 6),
+                    Text(
+                      "关键指引：若录音卡曾在官方 App 绑定过",
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFF57F17)),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 4),
+                Text(
+                  "1. 务必在官方 App 页面底部点击【解绑设备】，或长按卡上实体键 10 秒恢复出厂设置（清除官方私有密钥独占锁定），否则芯片固件会在数秒后主动断连！\n2. C·ONE 采用 BLE GATT 应用层直连，无需在 iPhone 系统设置蓝牙列表配对即可全功能使用。",
+                  style: TextStyle(fontSize: 11, color: Color(0xFF5D4037), height: 1.4),
                 ),
               ],
             ),
@@ -796,8 +816,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                     final err = devNotifier.lastError ?? "连接握手超时";
                                     setState(() {
                                       _isConnecting = false;
-                                      _connectingDeviceId = null;
-                                      _connectionError = "连接未完成: $err\n请靠近录音卡或长按按键 3 秒进入配对状态后重试";
+                                      _connectionError = "连接未完成: $err\n⚠️ 重点排查：若设备显示连接后数秒内断开，说明录音卡芯片处于官方私有密钥独占锁定状态。请在官方 App 底部点击【解绑设备】，或长按录音卡正面按键 10 秒彻底恢复出厂设置（清除私有绑定）后再试。";
                                     });
                                   }
                                 }

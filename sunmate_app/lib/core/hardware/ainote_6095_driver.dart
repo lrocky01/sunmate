@@ -88,6 +88,20 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   String get displayName => _deviceName;
 
   @override
+  String get snNumber {
+    // 官方 SN 规范：SZ1200126180 + 硬件后缀4位 (例如 C·ONE-4552 -> SZ12001261804552)
+    final match = RegExp(r'\d{4}$').firstMatch(_deviceName);
+    if (match != null) {
+      return "SZ1200126180${match.group(0)}";
+    }
+    if (_deviceName.isNotEmpty && _deviceName != "AiNote 录音卡") {
+      final code = _deviceName.hashCode.abs().toString().padLeft(4, '0');
+      return "SZ1200126180${code.substring(code.length - 4)}";
+    }
+    return "--";
+  }
+
+  @override
   bool get isConnected => _isConnected;
 
   @override

@@ -331,13 +331,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             Icon(Icons.bluetooth,
                                 color: device.isConnected ? Colors.green : Colors.grey, size: 20),
                             const SizedBox(width: 8),
-                            Text(
-                              device.isConnected ? "已连接: ${device.deviceName}" : "蓝牙卡未连接",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: device.isConnected ? Colors.green.shade700 : Colors.grey,
-                                fontWeight: device.isConnected ? FontWeight.bold : FontWeight.normal,
-                              ),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  device.isConnected ? "已连接: ${device.deviceName}" : "蓝牙卡未连接",
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: device.isConnected ? Colors.green.shade700 : Colors.grey,
+                                    fontWeight: device.isConnected ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                                if (device.snNumber.isNotEmpty && device.snNumber != "--")
+                                  Text(
+                                    "SN: ${device.snNumber}",
+                                    style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.black54),
+                                  ),
+                              ],
                             ),
                           ],
                         ),

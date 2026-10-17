@@ -74,6 +74,9 @@ abstract class HardwareDeviceDriver {
   /// 设备展示名称
   String get displayName;
 
+  /// 硬件唯一序列号 (SN)
+  String get snNumber => "";
+
   /// 是否已连接/可用
   bool get isConnected;
 

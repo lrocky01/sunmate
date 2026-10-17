@@ -3,6 +3,7 @@ class DeviceStatus {
   final bool isConnected;
   final String deviceName;
   final String deviceId;
+  final String snNumber;       // 硬件唯一序列号 (例如 SZ12001261804552)
   final int batteryLevel;      // 0 ~ 100%
   final bool isCharging;
   final int recordingState;    // 0: 空闲, 1: 录音中, 2: 暂停
@@ -14,6 +15,7 @@ class DeviceStatus {
     this.isConnected = false,
     this.deviceName = "未连接",
     this.deviceId = "",
+    this.snNumber = "--",
     this.batteryLevel = 0,
     this.isCharging = false,
     this.recordingState = 0,
@@ -29,6 +31,7 @@ class DeviceStatus {
     bool? isConnected,
     String? deviceName,
     String? deviceId,
+    String? snNumber,
     int? batteryLevel,
     bool? isCharging,
     int? recordingState,
@@ -40,6 +43,7 @@ class DeviceStatus {
       isConnected: isConnected ?? this.isConnected,
       deviceName: deviceName ?? this.deviceName,
       deviceId: deviceId ?? this.deviceId,
+      snNumber: snNumber ?? this.snNumber,
       batteryLevel: batteryLevel ?? this.batteryLevel,
       isCharging: isCharging ?? this.isCharging,
       recordingState: recordingState ?? this.recordingState,

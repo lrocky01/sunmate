@@ -35,6 +35,7 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
     state = state.copyWith(
       isConnected: driver.isConnected,
       deviceName: driver.displayName,
+      snNumber: driver.snNumber,
       batteryLevel: driver.batteryLevel,
       recordingState: driver.isRecording ? 1 : (driver.isPaused ? 2 : 0),
     );
