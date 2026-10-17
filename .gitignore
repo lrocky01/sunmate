@@ -28,6 +28,9 @@ sunmate_app/ios/Flutter/flutter_export_environment.sh
 decompiled/
 decompiled_src/
 decompiled_ancs/
+decompiled_apk/
+decompiled_full/
+decompiled_ble/
 tools/
 classes.dex
 *.apk

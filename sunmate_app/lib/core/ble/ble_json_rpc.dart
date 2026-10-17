@@ -110,4 +110,26 @@ class BleJsonRpc {
       if (sharedSecret != null) "shared_secret": sharedSecret,
     });
   }
+
+  // 13. 指示灯控制 (对齐官方 lightCtrl，让硬件从广播快闪切换为连接就绪常亮)
+  // mode: 4 = 配对连接成功常亮/就绪, 0 = 熄灭, 1 = 白灯, 2 = 录音红灯
+  static Uint8List lightCtrl({int mode = 4, bool success = true}) {
+    return buildRequest(0x0006, "lightCtrl", {
+      "mode": mode,
+      "success": success,
+    });
+  }
+
+  // 14. 构造原始纯 UTF-8 JSON 字节 (用于与 TLV 双模兼容下发)
+  static Uint8List buildRawJson(String method, [Map<String, dynamic>? params]) {
+    final Map<String, dynamic> rpcMap = {
+      "version": "1.0.0",
+      "method": method,
+      "id": _requestId++,
+    };
+    if (params != null && params.isNotEmpty) {
+      rpcMap["params"] = params;
+    }
+    return Uint8List.fromList(utf8.encode(jsonEncode(rpcMap)));
+  }
 }

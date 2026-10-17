@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>阳光智伴</string>
+	<string>SunMate</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>sunmate_app</string>
+	<string>SunMate</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -57,17 +57,17 @@
 
 	<!-- 蓝牙权限说明 -->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>阳光智伴需要使用蓝牙连接 AiNote 硬件录音卡以接收语音流与硬件同步的系统通知</string>
+	<string>SunMate 需要使用蓝牙连接 AiNote 硬件录音卡以接收语音流与硬件同步的系统通知</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>阳光智伴需要使用蓝牙连接 AiNote 硬件录音卡</string>
+	<string>SunMate 需要使用蓝牙连接 AiNote 硬件录音卡</string>
 
 	<!-- 麦克风权限说明 (手机备用拾音) -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>阳光智伴需要麦克风权限以提供本地高品质语音录音与即按即说对讲</string>
+	<string>SunMate 需要麦克风权限以提供本地高品质语音录音与即按即说对讲</string>
 
 	<!-- 本地局域网通信权限 (自建 MOSS-ASR 与本地服务访问) -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>阳光智伴需要连接本地局域网的自建 MOSS-ASR 语音转写服务与外部智能体</string>
+	<string>SunMate 需要连接本地局域网的自建 MOSS-ASR 语音转写服务与外部智能体</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_http._tcp</string>

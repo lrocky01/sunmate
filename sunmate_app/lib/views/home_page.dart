@@ -364,16 +364,25 @@ class _BleDevicePickerModal extends ConsumerStatefulWidget {
 class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   bool _isConnecting = false;
   String? _connectingDeviceId;
+  String? _connectingDeviceName;
+  String? _connectionError;
 
   @override
   void initState() {
     super.initState();
-    ref.read(deviceProvider.notifier).scanNearbyDevices();
+    _startScan();
+  }
+
+  void _startScan() {
+    setState(() {
+      _connectionError = null;
+    });
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
   }
 
   @override
   void dispose() {
-    ref.read(deviceProvider.notifier).stopScan();
+    FlutterBluePlus.stopScan();
     super.dispose();
   }
 
@@ -382,7 +391,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
     final devNotifier = ref.read(deviceProvider.notifier);
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.72,
+      height: MediaQuery.of(context).size.height * 0.75,
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -409,18 +418,48 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                     Text("搜索蓝牙录音卡设备",
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     SizedBox(height: 2),
-                    Text("请确保 AiNote 6095 / 录音卡处于开机状态",
+                    Text("请确保 C·ONE / AiNote 6095 处于开机状态",
                         style: TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
                 ),
                 IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: "重新扫描",
-                  onPressed: () => devNotifier.scanNearbyDevices(),
+                  onPressed: _isConnecting ? null : _startScan,
                 ),
               ],
             ),
           ),
+
+          // 连接错误提示卡片
+          if (_connectionError != null) ...[
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.red.shade300),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _connectionError!,
+                      style: TextStyle(fontSize: 12, color: Colors.red.shade900, height: 1.3),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _startScan,
+                    child: const Text("重试", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
           // iOS 系统配对重要提示横幅
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -436,7 +475,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "重要提示：点击连接后，iOS 系统可能会弹出【想要与您的 iPhone 配对】，请务必点击【配对】以开启按键控制与通知推送。",
+                    "重要提示：点击连接后，iOS 系统若弹出【想要与您的 iPhone 配对】，请务必点击【配对】；连接成功后硬件指示灯将常亮就绪。",
                     style: TextStyle(fontSize: 11, color: Color(0xFFE65100), height: 1.3),
                   ),
                 ),
@@ -444,124 +483,146 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             ),
           ),
           const Divider(height: 1),
+
+          // 主体内容：正在连接提示 vs 扫描设备列表
           Expanded(
-            child: StreamBuilder<List<ScanResult>>(
-              stream: devNotifier.scanNearbyDevices(),
-              builder: (context, snapshot) {
-                final allResults = snapshot.data ?? [];
-
-                // 1. 过滤掉所有无名字的匿名垃圾广播 (对齐系统蓝牙体验，消除几十个未知设备的杂音)
-                final validResults = allResults.where((item) {
-                  final n = item.device.platformName.isNotEmpty
-                      ? item.device.platformName
-                      : item.advertisementData.advName;
-                  return n.trim().isNotEmpty;
-                }).toList();
-
-                if (validResults.isEmpty) {
-                  return Center(
+            child: _isConnecting
+                ? Center(
                     child: Padding(
-                      padding: const EdgeInsets.all(24),
+                      padding: const EdgeInsets.all(32),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.bluetooth_searching, size: 48, color: Colors.grey.shade400),
-                          const SizedBox(height: 12),
-                          const Text("正在搜索附近的蓝牙设备...",
-                              style: TextStyle(fontWeight: FontWeight.bold)),
+                          const SizedBox(
+                            width: 52,
+                            height: 52,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFF8C00)),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            "正在连接 ${_connectingDeviceName ?? '录音卡'}...",
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
                           const SizedBox(height: 8),
                           const Text(
-                            "提示：\n1. 请确认录音卡已开机；\n2. 若设备广播名包含 CONE 或 AiNote，请靠近手机；\n3. 若硬件已与其它手机连接，请长按按键使其进入广播配对状态。",
+                            "已独占蓝牙通道，正在下发鉴权握手与状态同步...\n请留意硬件指示灯由快闪转为常亮",
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
-                          ),
-                          const SizedBox(height: 16),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFFF8C00),
-                              foregroundColor: Colors.white,
-                            ),
-                            icon: const Icon(Icons.refresh),
-                            label: const Text("重新搜索"),
-                            onPressed: () => devNotifier.scanNearbyDevices(),
                           ),
                         ],
                       ),
                     ),
-                  );
-                }
+                  )
+                : StreamBuilder<List<ScanResult>>(
+                    // 仅监听纯流 scanResults，坚决不重新调用 scanNearbyDevices()
+                    stream: FlutterBluePlus.scanResults,
+                    builder: (context, snapshot) {
+                      final allResults = snapshot.data ?? [];
 
-                // 2. 智能排序：推荐录音卡置顶 (支持 C·ONE-4552, AiNote, 1913 服务等)，其余按信号由强到弱排序
-                validResults.sort((a, b) {
-                  final nameA = a.device.platformName.isNotEmpty ? a.device.platformName : a.advertisementData.advName;
-                  final nameB = b.device.platformName.isNotEmpty ? b.device.platformName : b.advertisementData.advName;
+                      // 1. 过滤掉所有无名字的匿名广播
+                      final validResults = allResults.where((item) {
+                        final n = item.device.platformName.isNotEmpty
+                            ? item.device.platformName
+                            : item.advertisementData.advName;
+                        return n.trim().isNotEmpty;
+                      }).toList();
 
-                  final isTargetA = BleConstants.isTargetDevice(nameA, a.advertisementData.serviceUuids);
-                  final isTargetB = BleConstants.isTargetDevice(nameB, b.advertisementData.serviceUuids);
-
-                  if (isTargetA && !isTargetB) return -1;
-                  if (!isTargetA && isTargetB) return 1;
-                  return b.rssi.compareTo(a.rssi); // 信号强的排前面
-                });
-
-                return ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  itemCount: validResults.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final item = validResults[index];
-                    final name = item.device.platformName.isNotEmpty
-                        ? item.device.platformName
-                        : item.advertisementData.advName;
-
-                    final isTarget = BleConstants.isTargetDevice(name, item.advertisementData.serviceUuids);
-
-                    final isThisConnecting = _isConnecting && _connectingDeviceId == item.device.remoteId.str;
-
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      leading: CircleAvatar(
-                        backgroundColor: isTarget ? const Color(0xFFFFF3E0) : Colors.grey.shade100,
-                        child: Icon(
-                          Icons.bluetooth,
-                          color: isTarget ? const Color(0xFFFF8C00) : Colors.grey.shade600,
-                        ),
-                      ),
-                      title: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              name,
-                              style: TextStyle(
-                                fontWeight: isTarget ? FontWeight.bold : FontWeight.normal,
-                                color: isTarget ? const Color(0xFFE65100) : Colors.black87,
-                              ),
+                      if (validResults.isEmpty) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.bluetooth_searching, size: 48, color: Colors.grey.shade400),
+                                const SizedBox(height: 12),
+                                const Text("正在搜索附近的蓝牙录音卡...",
+                                    style: TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 8),
+                                const Text(
+                                  "提示：\n1. 请确认录音卡处于开机状态；\n2. 若名称包含 C·ONE 或 AiNote，请靠近手机；\n3. 若硬件卡已连其它设备，请长按按键 3 秒重新广播配对。",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
+                                ),
+                                const SizedBox(height: 16),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFFFF8C00),
+                                    foregroundColor: Colors.white,
+                                  ),
+                                  icon: const Icon(Icons.refresh),
+                                  label: const Text("重新搜索"),
+                                  onPressed: _startScan,
+                                ),
+                              ],
                             ),
                           ),
-                          if (isTarget)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFF8C00).withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(4),
+                        );
+                      }
+
+                      // 2. 智能排序：推荐录音卡置顶 (支持 C·ONE-4552, AiNote 等)，其余按信号由强到弱排序
+                      validResults.sort((a, b) {
+                        final nameA = a.device.platformName.isNotEmpty ? a.device.platformName : a.advertisementData.advName;
+                        final nameB = b.device.platformName.isNotEmpty ? b.device.platformName : b.advertisementData.advName;
+
+                        final isTargetA = BleConstants.isTargetDevice(nameA, a.advertisementData.serviceUuids);
+                        final isTargetB = BleConstants.isTargetDevice(nameB, b.advertisementData.serviceUuids);
+
+                        if (isTargetA && !isTargetB) return -1;
+                        if (!isTargetA && isTargetB) return 1;
+                        return b.rssi.compareTo(a.rssi);
+                      });
+
+                      return ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        itemCount: validResults.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = validResults[index];
+                          final name = item.device.platformName.isNotEmpty
+                              ? item.device.platformName
+                              : item.advertisementData.advName;
+
+                          final isTarget = BleConstants.isTargetDevice(name, item.advertisementData.serviceUuids);
+
+                          return ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            leading: CircleAvatar(
+                              backgroundColor: isTarget ? const Color(0xFFFFF3E0) : Colors.grey.shade100,
+                              child: Icon(
+                                Icons.bluetooth,
+                                color: isTarget ? const Color(0xFFFF8C00) : Colors.grey.shade600,
                               ),
-                              child: const Text("推荐录音卡",
-                                  style: TextStyle(fontSize: 10, color: Color(0xFFE65100), fontWeight: FontWeight.bold)),
                             ),
-                        ],
-                      ),
-                      subtitle: Text("信号: ${item.rssi} dBm · ID: ${item.device.remoteId.str}",
-                          style: const TextStyle(fontSize: 11, color: Colors.grey)),
-                      trailing: isThisConnecting
-                          ? const SizedBox(
-                              width: 28,
-                              height: 28,
-                              child: Padding(
-                                padding: EdgeInsets.all(4),
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFFFF8C00)),
-                              ),
-                            )
-                          : ElevatedButton(
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: TextStyle(
+                                      fontWeight: isTarget ? FontWeight.bold : FontWeight.normal,
+                                      color: isTarget ? const Color(0xFFE65100) : Colors.black87,
+                                    ),
+                                  ),
+                                ),
+                                if (isTarget)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFFF8C00).withOpacity(0.12),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: const Text("推荐录音卡",
+                                        style: TextStyle(fontSize: 10, color: Color(0xFFE65100), fontWeight: FontWeight.bold)),
+                                  ),
+                              ],
+                            ),
+                            subtitle: Text("信号: ${item.rssi} dBm · ID: ${item.device.remoteId.str}",
+                                style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                            trailing: ElevatedButton(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: isTarget ? const Color(0xFFFF8C00) : Colors.grey.shade200,
                                 foregroundColor: isTarget ? Colors.white : Colors.black87,
@@ -570,48 +631,47 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
                               child: const Text("连接"),
-                              onPressed: _isConnecting
-                                  ? null
-                                  : () async {
-                                      setState(() {
-                                        _isConnecting = true;
-                                        _connectingDeviceId = item.device.remoteId.str;
-                                      });
+                              onPressed: () async {
+                                // 1. 彻底停止扫描，独占 CoreBluetooth 通道，防止连接被打断
+                                await FlutterBluePlus.stopScan();
 
-                                      final ok = await devNotifier.connectDevice(item.device);
+                                setState(() {
+                                  _isConnecting = true;
+                                  _connectingDeviceId = item.device.remoteId.str;
+                                  _connectingDeviceName = name;
+                                  _connectionError = null;
+                                });
 
-                                      if (mounted) {
-                                        setState(() {
-                                          _isConnecting = false;
-                                          _connectingDeviceId = null;
-                                        });
+                                final ok = await devNotifier.connectDevice(item.device);
 
-                                        if (ok) {
-                                          Navigator.of(context).pop();
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(
-                                              content: Text("✓ 已成功连接到 $name！"),
-                                              backgroundColor: Colors.green.shade700,
-                                            ),
-                                          );
-                                        } else {
-                                          final err = devNotifier.lastError ?? "连接握手超时";
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(
-                                              content: Text("✗ 连接未完成: $err\n请靠近录音卡或长按按键重新进入配对模式"),
-                                              backgroundColor: Colors.red.shade800,
-                                              duration: const Duration(seconds: 5),
-                                            ),
-                                          );
-                                        }
-                                      }
-                                    },
+                                if (mounted) {
+                                  setState(() {
+                                    _isConnecting = false;
+                                    _connectingDeviceId = null;
+                                  });
+
+                                  if (ok) {
+                                    Navigator.of(context).pop();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text("✓ 已成功连接到 $name！指示灯已就绪"),
+                                        backgroundColor: Colors.green.shade700,
+                                      ),
+                                    );
+                                  } else {
+                                    final err = devNotifier.lastError ?? "连接握手超时";
+                                    setState(() {
+                                      _connectionError = "连接未完成: $err\n请靠近录音卡或长按按键 3 秒进入配对状态后重试";
+                                    });
+                                  }
+                                }
+                              },
                             ),
-                    );
-                  },
-                );
-              },
-            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
           ),
         ],
       ),

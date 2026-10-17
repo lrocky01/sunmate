@@ -133,21 +133,21 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<bool> connectDevice(BluetoothDevice device, {bool isAutoReconnect = false}) async {
     lastErrorMessage = null;
     try {
-      // 1. 核心关键防冲突：先停止正在运行的全局扫描，独占 iOS CoreBluetooth 通道
+      // 1. 核心防冲突：先彻底停止正在运行的扫描，独占 iOS CoreBluetooth 通道
       await FlutterBluePlus.stopScan();
 
-      // 2. 若此前曾连过该设备，先安全断开并取消所有老监听
+      // 2. 清理老监听句柄
       await _cleanConnection();
-      try {
-        await device.disconnect();
-      } catch (_) {}
 
-      // 3. 发起 GATT 物理连接
-      await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+      // 3. 安全连接检查：避免盲目 disconnect 导致外设射频重启
+      final isAlreadyConnected = device.isConnected;
+      if (!isAlreadyConnected) {
+        await device.connect(autoConnect: false, timeout: const Duration(seconds: 15));
+      }
       _connectedDevice = device;
       _deviceName = device.platformName.isNotEmpty ? device.platformName : "AiNote 录音卡";
 
-      // 4. 监听底层连接状态变化，外设一旦断开立即感知并更新状态
+      // 4. 监听底层连接状态变化
       _connectionStateSub = device.connectionState.listen((connState) {
         if (connState == BluetoothConnectionState.disconnected) {
           print("BLE 硬件已断开连接");
@@ -228,7 +228,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
             _stateChangeController.add(null);
           }
         } catch (e) {
-          print("读取电池特征值提示 (iOS 可能正弹出配对弹窗，或需握手后读取): $e");
+          print("读取电池特征值提示: $e");
         }
 
         try {
@@ -268,19 +268,47 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         }
       }
 
-      // 13. 发送官方鉴权与状态机握手指令 (bindRequest + verifyIdentity + syncTime + getStatus)
+      // 13. 发送官方鉴权握手与停闪就绪指令序列 (双模兼容：TLV + 纯 JSON 文本)
       try {
         await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.bindRequest());
+        await _sendCommandBoth(
+          BleJsonRpc.bindRequest(),
+          BleJsonRpc.buildRawJson("bindRequest", {
+            "confirm_code": "123456",
+            "sign": "a1b2c3d4",
+            "user_id": "1000000000000000001",
+            "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          }),
+        );
 
         await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.verifyIdentity());
+        await _sendCommandBoth(
+          BleJsonRpc.verifyIdentity(),
+          BleJsonRpc.buildRawJson("verifyIdentity", {
+            "token": "sunmate_auth",
+            "timestamp": DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          }),
+        );
 
         await Future.delayed(const Duration(milliseconds: 150));
         await syncTime();
 
         await Future.delayed(const Duration(milliseconds: 150));
-        await _sendCommand(BleJsonRpc.getStatus());
+        await _sendCommandBoth(
+          BleJsonRpc.getStatus(),
+          BleJsonRpc.buildRawJson("getStatus"),
+        );
+
+        // 【核心关停快闪指令】：向硬件下发 lightCtrl(mode: 4, success: true)
+        // 固件 MCU 接收后立即退出广播快闪状态，指示灯转为就绪常亮！
+        await Future.delayed(const Duration(milliseconds: 150));
+        await _sendCommandBoth(
+          BleJsonRpc.lightCtrl(mode: 4, success: true),
+          BleJsonRpc.buildRawJson("lightCtrl", {
+            "mode": 4,
+            "success": true,
+          }),
+        );
       } catch (e) {
         print("握手指令序列下发提示: $e");
       }
@@ -412,6 +440,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         } catch (_) {}
       }
     }
+  }
+
+  /// 双模指令下发：同时向硬件发送 TLV 协议包与原始纯 JSON 字节，确保新旧所有固件均能无缝解析并响应
+  Future<void> _sendCommandBoth(Uint8List tlvBytes, Uint8List rawJsonBytes) async {
+    await _sendCommand(tlvBytes);
+    await Future.delayed(const Duration(milliseconds: 35));
+    await _sendCommand(rawJsonBytes);
   }
 
   /// 处理 2B30 特征值上报
