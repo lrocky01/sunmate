@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sunmate_app/core/ble/ios_ble_connection.dart';
@@ -45,5 +46,17 @@ void main() {
     final bridge = IosBleConnection(isSupported: false);
     await bridge.configure('device', requiresAncs: true);
     expect(await bridge.diagnostics('device'), isEmpty);
+  });
+  test(
+      'a missing native bridge response cannot block connection diagnostics forever',
+      () async {
+    messenger.setMockMethodCallHandler(
+        channel, (_) => Completer<Object?>().future);
+    final bridge = IosBleConnection(
+        isSupported: true, timeout: const Duration(milliseconds: 20));
+    await expectLater(bridge.configure('device', requiresAncs: true),
+        throwsA(isA<TimeoutException>()));
+    await expectLater(
+        bridge.diagnostics('device'), throwsA(isA<TimeoutException>()));
   });
 }

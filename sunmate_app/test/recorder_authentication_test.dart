@@ -171,4 +171,47 @@ void main() {
     pending.complete('test-only-issuer-result');
     await expectLater(reply, throwsStateError);
   });
+
+  test(
+      'pairing commits only a valid new locally saved key; existing keys cannot be overwritten',
+      () async {
+    final store = MemoryKeyStore();
+    var committed = false;
+    final auth = RecorderAuthentication(
+        protocol: RecorderProtocol.telink,
+        deviceId: 'device',
+        store: store,
+        verifier: ({required checkContent, required mac, required sn}) async =>
+            'test-only-hmac',
+        committer: ({required sn, required mac, required sharedSecret}) async {
+          expect(store.value, sharedSecret);
+          expect(sn, 'AB00000000000001');
+          expect(mac, '11:22:33:44:55:66');
+          expect(RecorderCryptography.decode32(sharedSecret), hasLength(32));
+          committed = true;
+        });
+    await auth.answerManufacturer({
+      'encrypted': 'test-only-challenge',
+      'mac': '11:22:33:44:55:66',
+      'sn': 'AB00000000000001'
+    });
+    await auth.acceptPairing(
+        {'success': true, 'public_key': base64Encode(bobPublic)});
+    expect(committed, true);
+    final second = RecorderAuthentication(
+        protocol: RecorderProtocol.telink,
+        deviceId: 'device',
+        store: store,
+        verifier: ({required checkContent, required mac, required sn}) async =>
+            'unused');
+    await second.loadKey();
+    await expectLater(
+        second.answerManufacturer({
+          'encrypted': 'test-only-challenge',
+          'mac': 'mac',
+          'sn': 'AB00000000000001'
+        }),
+        throwsStateError);
+    expect(store.writes, 1);
+  });
 }

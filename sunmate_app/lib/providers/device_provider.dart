@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
 import '../core/ble/yoooclaw_account.dart';
+import '../core/ble/recorder_authentication.dart';
 import '../models/device_status.dart';
 
 /// 硬件驱动工厂全局 Provider
@@ -115,6 +116,11 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
   bool get isBleLinkConnected => _factory.bleDriver.isLinkConnected;
   bool get isBleConnecting => _factory.bleDriver.isConnecting;
   bool get requiresAncs => _factory.bleDriver.requiresAncs;
+  bool get canReconnectVerifiedDevice => _factory.bleDriver.hasVerifiedDevice;
+  bool get supportsAncsRequestConfiguration =>
+      _factory.bleDriver.supportsAncsRequestConfiguration;
+  Future<bool> configureBleAncsRequest(bool enable) =>
+      _factory.bleDriver.sendAncsConfig(enable: enable);
   bool? get ancsAuthorized => _factory.bleDriver.ancsAuthorized;
 
   Future<void> cancelBleConnection() => _factory.bleDriver.disconnect();
@@ -135,10 +141,12 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
   Stream<String> get logStream => _factory.bleDriver.logStream;
 
   /// 连接指定的蓝牙外设
-  Future<bool> connectDevice(BluetoothDevice device) async {
+  Future<bool> connectDevice(BluetoothDevice device,
+      {RecorderAccountSession? accountSession}) async {
     await stopScan(); // 关键：连接前彻底停止扫描
     await switchDriverType(HardwareDeviceType.ainote6095Ble);
-    final ok = await _factory.bleDriver.connectDevice(device);
+    final ok = await _factory.bleDriver
+        .connectDevice(device, accountSession: accountSession);
     _updateStateFromDriver(_factory.activeDriver);
     return ok;
   }

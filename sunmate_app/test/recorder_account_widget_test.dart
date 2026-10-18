@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
 import 'package:sunmate_app/views/recorder_account_sheet.dart';
+import 'package:sunmate_app/views/home_page.dart';
 import 'yoooclaw_account_test.dart' show record;
 
 class WidgetAccount extends YoooClawAccount {
@@ -12,26 +13,77 @@ class WidgetAccount extends YoooClawAccount {
   int smsCalls = 0;
   final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
   @override
+  List<AccountRecorderDevice> get devices =>
+      [AccountRecorderDevice.fromRecord(record())!];
+  @override
   bool get isLoggedIn => loggedIn;
   @override
-  Future<void> sendSms(String phone) async { smsCalls++; }
+  Future<void> sendSms(String phone) async {
+    smsCalls++;
+  }
+
   @override
-  Future<void> login(String phone, String smsCode) async { loggedIn = true; }
+  Future<void> login(String phone, String smsCode) async {
+    loggedIn = true;
+  }
+
   @override
   Future<List<OwnedRecorderBinding>> loadBindings() async => [binding];
   @override
-  void close() { closed = true; loggedIn = false; binding.clear(); super.close(); }
+  void close() {
+    closed = true;
+    loggedIn = false;
+    binding.clear();
+    super.close();
+  }
 }
+
 void main() {
-  testWidgets('phone layout supports login; mismatched/unobserved hardware cannot restore', (tester) async {
+  testWidgets(
+      'connection entry requires account login before scanning or device SN',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final account = WidgetAccount();
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+            home: Scaffold(body: RecorderConnectionSheet(account: account)))));
+    await tester.pumpAndSettle();
+    expect(find.text('登录并连接录音卡'), findsOneWidget);
+    expect(find.text('搜索蓝牙录音卡设备'), findsNothing);
+    expect(find.textContaining('当前录音卡 SN'), findsNothing);
+    await tester.enterText(find.byType(TextField).at(0), '13800000000');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.ensureVisible(find.text('登录并读取我的设备'));
+    await tester.tap(find.text('登录并读取我的设备'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择并搜索'), findsOneWidget);
+    expect(find.text('Test recorder'), findsOneWidget);
+    final scroll = tester.widget<SingleChildScrollView>(find.descendant(
+        of: find.byType(RecorderAccountSheet),
+        matching: find.byType(SingleChildScrollView)));
+    expect(scroll.controller!.offset, 0);
+    expect(account.closed, false);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(account.closed, true);
+  });
+  testWidgets(
+      'phone layout supports login; mismatched/unobserved hardware cannot restore',
+      (tester) async {
     SharedPreferences.setMockInitialValues({});
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final account = WidgetAccount();
-    await tester.pumpWidget(ProviderScope(child: MaterialApp(home: Scaffold(
-        body: RecorderAccountSheet(account: account)))));
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+            home: Scaffold(body: RecorderAccountSheet(account: account)))));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     await tester.enterText(find.byType(TextField).at(0), '13800000000');
@@ -45,7 +97,8 @@ void main() {
     await tester.tap(find.text('登录并读取我的绑定设备'));
     await tester.pumpAndSettle();
     expect(find.text('Test recorder'), findsOneWidget);
-    final restore = tester.widget<FilledButton>(find.widgetWithText(FilledButton, '恢复并验证连接'));
+    final restore = tester
+        .widget<FilledButton>(find.widgetWithText(FilledButton, '恢复并验证连接'));
     expect(restore.onPressed, isNull);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());

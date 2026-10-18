@@ -7,7 +7,15 @@ import '../providers/device_provider.dart';
 
 class RecorderAccountSheet extends ConsumerStatefulWidget {
   final YoooClawAccount? account;
-  const RecorderAccountSheet({super.key, this.account});
+  final ValueChanged<AccountRecorderDevice>? onSelectDevice;
+  final bool closeAccountOnDispose;
+  final Future<bool> Function()? onReconnectVerified;
+  const RecorderAccountSheet(
+      {super.key,
+      this.account,
+      this.onSelectDevice,
+      this.onReconnectVerified,
+      this.closeAccountOnDispose = true});
   @override
   ConsumerState<RecorderAccountSheet> createState() =>
       _RecorderAccountSheetState();
@@ -17,6 +25,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
   late final YoooClawAccount _account;
   final _phone = TextEditingController();
   final _code = TextEditingController();
+  final _scroll = ScrollController();
   List<OwnedRecorderBinding> _bindings = [];
   Timer? _timer;
   int _seconds = 0;
@@ -69,17 +78,23 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
     if (!mounted) return;
     setState(() {
       _bindings = bindings;
-      _status = bindings.isNotEmpty
-          ? '已读取 ${bindings.length} 台具备恢复材料的设备，请核对当前卡的 SN'
-          : _account.totalDevices == 0
-              ? '当前官方账号没有返回设备记录，请核对登录账号'
-              : _account.missingSharedSecretDevices > 0
-                  ? '账号设备资料中缺少共享密钥。请先让官方 App 联网连接并完成同步，再点「重新读取我的设备」'
-                  : '账号有设备记录，但没有唯一且格式完整的可恢复密钥；未猜测或替换';
+      _status = widget.onSelectDevice != null
+          ? '已读取 ${_account.devices.length} 台账号设备，请选择要连接的录音卡'
+          : bindings.isNotEmpty
+              ? '已读取 ${bindings.length} 台具备恢复材料的设备，请核对当前卡的 SN'
+              : _account.totalDevices == 0
+                  ? '当前官方账号没有返回设备记录，请核对登录账号'
+                  : _account.missingSharedSecretDevices > 0
+                      ? '账号设备资料中缺少共享密钥。请先让官方 App 联网连接并完成同步，再点「重新读取我的设备」'
+                      : '账号有设备记录，但没有唯一且格式完整的可恢复密钥；未猜测或替换';
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
     });
   }
 
   Future<void> _login() => _run(() async {
+        FocusScope.of(context).unfocus();
         try {
           await _account.login(_phone.text.trim(), _code.text.trim());
           if (mounted) setState(() => _status = '官方账号登录成功，正在读取设备绑定');
@@ -108,7 +123,8 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
     _timer?.cancel();
     _phone.dispose();
     _code.dispose();
-    _account.close();
+    _scroll.dispose();
+    if (widget.closeAccountOnDispose) _account.close();
     super.dispose();
   }
 
@@ -123,113 +139,155 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
         padding: EdgeInsets.fromLTRB(
             16, 16, 16, 16 + MediaQuery.viewInsetsOf(context).bottom),
         child: SingleChildScrollView(
+            controller: _scroll,
             child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(children: [
-              const Expanded(
-                  child: Text('恢复官方账号设备绑定',
-                      style: TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.bold))),
-              IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  tooltip: '关闭',
-                  icon: const Icon(Icons.close)),
-            ]),
-            const Text(
-                '使用你自己的 YoooClaw App 账号验证码登录，读取已有设备绑定资料。验证码和登录会话只在本页内存中使用，关闭后清除。'),
-            const SizedBox(height: 8),
-            const Text(
-                '先在首页连接一次目标录音卡，取得设备上报的 SN。恢复时必须与账号记录的 SN 和协议同时匹配。录音、MOSS-ASR 和 Hermes 仍走你的私有端点。'),
-            const SizedBox(height: 12),
-            Text('当前录音卡 SN：${notifier.detectedBleSerial}'),
-            const SizedBox(height: 12),
-            if (!_account.isLoggedIn) ...[
-              TextField(
-                  controller: _phone,
-                  enabled: !_busy,
-                  decoration: const InputDecoration(labelText: '官方账号手机号'),
-                  keyboardType: TextInputType.phone,
-                  autofillHints: const [
-                    AutofillHints.telephoneNumber
-                  ],
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(11)
-                  ]),
-              const SizedBox(height: 8),
-              Row(children: [
-                Expanded(
-                    child: TextField(
-                        controller: _code,
-                        enabled: !_busy,
-                        decoration:
-                            const InputDecoration(labelText: '4 位短信验证码'),
-                        keyboardType: TextInputType.number,
-                        obscureText: true,
-                        autofillHints: const [
-                      AutofillHints.oneTimeCode
-                    ],
-                        inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(4)
-                    ])),
-                const SizedBox(width: 8),
-                TextButton(
-                    onPressed: _busy || _seconds > 0 ? null : _sendSms,
-                    child: Text(_seconds > 0 ? '${_seconds}s' : '获取验证码')),
-              ]),
-              const SizedBox(height: 12),
-              FilledButton(
-                  onPressed: _busy ? null : _login,
-                  child: const Text('登录并读取我的绑定设备')),
-            ] else ...[
-              OutlinedButton(
-                  onPressed: _busy ? null : () => _run(_loadBindings),
-                  child: const Text('重新读取我的设备')),
-            ],
-            if (_busy)
-              const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: LinearProgressIndicator()),
-            if (_status.isNotEmpty)
-              Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(_status)),
-            if (_account.diagnostics.isNotEmpty) ...[
-              SelectableText(_account.diagnostics.join('\n'),
-                  style: const TextStyle(fontSize: 11)),
-              TextButton(
-                  onPressed: () => Clipboard.setData(ClipboardData(
-                      text: 'SunMate 官方账号请求诊断\n'
-                          '${_account.diagnostics.join("\n")}')),
-                  child: const Text('复制账号诊断（不含凭据）')),
-            ],
-            for (final binding in _bindings)
-              Card(
-                  child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(binding.deviceName,
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                    Text(
-                        'SN：${binding.serialNumber}\n协议：${binding.protocol.name}'),
-                    const SizedBox(height: 8),
-                    FilledButton(
-                        onPressed: _busy || !notifier.canRestoreBinding(binding)
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(children: [
+                  Expanded(
+                      child: Text(
+                          widget.onSelectDevice != null
+                              ? '登录并连接录音卡'
+                              : '恢复官方账号设备绑定',
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.bold))),
+                  IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      tooltip: '关闭',
+                      icon: const Icon(Icons.close)),
+                ]),
+                Text(widget.onSelectDevice != null
+                    ? '先使用自己的 YoooClaw App 账号登录，再选择设备并连接。验证码和登录会话只在本次连接页面的内存中使用。'
+                    : '使用你自己的 YoooClaw App 账号验证码登录，读取已有设备绑定资料。验证码和登录会话只在本页内存中使用，关闭后清除。'),
+                const SizedBox(height: 8),
+                if (widget.onSelectDevice == null)
+                  const Text(
+                      '先在首页连接一次目标录音卡，取得设备上报的 SN。恢复时必须与账号记录的 SN 和协议同时匹配。录音、MOSS-ASR 和 Hermes 仍走你的私有端点。'),
+                const SizedBox(height: 12),
+                if (widget.onSelectDevice == null)
+                  Text('当前录音卡 SN：${notifier.detectedBleSerial}'),
+                const SizedBox(height: 12),
+                if (!_account.isLoggedIn) ...[
+                  if (widget.onReconnectVerified != null) ...[
+                    OutlinedButton(
+                        onPressed: _busy
                             ? null
-                            : () => _restore(binding),
-                        child: const Text('恢复并验证连接')),
-                    if (!notifier.canRestoreBinding(binding))
-                      const Text('当前卡尚未取得匹配的 SN / 协议，或设备正在操作中',
-                          style: TextStyle(fontSize: 12)),
+                            : () => _run(() async {
+                                  final connected =
+                                      await widget.onReconnectVerified!();
+                                  if (mounted)
+                                    setState(() => _status = connected
+                                        ? '设备身份已验证'
+                                        : '本机身份重连未完成，请查看蓝牙诊断');
+                                }),
+                        child: const Text('使用本机已验证身份重连')),
+                    const SizedBox(height: 8),
                   ],
-                ),
-              )),
-          ],
-        )),
+                  TextField(
+                      controller: _phone,
+                      enabled: !_busy,
+                      decoration: const InputDecoration(labelText: '官方账号手机号'),
+                      keyboardType: TextInputType.phone,
+                      autofillHints: const [
+                        AutofillHints.telephoneNumber
+                      ],
+                      inputFormatters: [
+                        FilteringTextInputFormatter.digitsOnly,
+                        LengthLimitingTextInputFormatter(11)
+                      ]),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                        child: TextField(
+                            controller: _code,
+                            enabled: !_busy,
+                            decoration:
+                                const InputDecoration(labelText: '4 位短信验证码'),
+                            keyboardType: TextInputType.number,
+                            obscureText: true,
+                            autofillHints: const [
+                          AutofillHints.oneTimeCode
+                        ],
+                            inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(4)
+                        ])),
+                    const SizedBox(width: 8),
+                    TextButton(
+                        onPressed: _busy || _seconds > 0 ? null : _sendSms,
+                        child: Text(_seconds > 0 ? '${_seconds}s' : '获取验证码')),
+                  ]),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                      onPressed: _busy ? null : _login,
+                      child: Text(widget.onSelectDevice != null
+                          ? '登录并读取我的设备'
+                          : '登录并读取我的绑定设备')),
+                ] else ...[
+                  OutlinedButton(
+                      onPressed: _busy ? null : () => _run(_loadBindings),
+                      child: const Text('重新读取我的设备')),
+                ],
+                if (_busy)
+                  const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: LinearProgressIndicator()),
+                if (_status.isNotEmpty)
+                  Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(_status)),
+                if (_account.diagnostics.isNotEmpty) ...[
+                  SelectableText(_account.diagnostics.join('\n'),
+                      style: const TextStyle(fontSize: 11)),
+                  TextButton(
+                      onPressed: () => Clipboard.setData(ClipboardData(
+                          text: 'SunMate 官方账号请求诊断\n'
+                              '${_account.diagnostics.join("\n")}')),
+                      child: const Text('复制账号诊断（不含凭据）')),
+                ],
+                if (widget.onSelectDevice != null && _account.isLoggedIn) ...[
+                  const Text(
+                      '选择连接后，将验证卡片的真实挑战，并将新绑定资料同步到自己的官方账号。录音、MOSS-ASR 和 Hermes 仍直连私有端点。'),
+                  for (final device in _account.devices)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(device.deviceName),
+                      subtitle: Text('SN：${device.serialNumber}'),
+                      trailing: FilledButton(
+                          onPressed: _busy
+                              ? null
+                              : () => widget.onSelectDevice!(device),
+                          child: const Text('选择并搜索')),
+                    ),
+                ],
+                if (widget.onSelectDevice == null)
+                  for (final binding in _bindings)
+                    Card(
+                        child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(binding.deviceName,
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold)),
+                          Text(
+                              'SN：${binding.serialNumber}\n协议：${binding.protocol.name}'),
+                          const SizedBox(height: 8),
+                          FilledButton(
+                              onPressed:
+                                  _busy || !notifier.canRestoreBinding(binding)
+                                      ? null
+                                      : () => _restore(binding),
+                              child: const Text('恢复并验证连接')),
+                          if (!notifier.canRestoreBinding(binding))
+                            const Text('当前卡尚未取得匹配的 SN / 协议，或设备正在操作中',
+                                style: TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    )),
+              ],
+            )),
       ),
     ));
   }

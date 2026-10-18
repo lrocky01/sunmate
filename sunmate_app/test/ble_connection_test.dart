@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +10,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sunmate_app/core/ble/ble_constants.dart';
 import 'package:sunmate_app/core/hardware/ainote_6095_driver.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
+import 'package:sunmate_app/core/ble/recorder_authentication.dart';
 import 'yoooclaw_account_test.dart' show record;
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
@@ -24,9 +27,12 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   bool otaOnly = false;
   bool rejectNotify = false;
   bool holdConnect = false;
+  Completer<void>? connectGate;
   String replyMethod = 'bindResult';
   Object replySuccess = false;
   bool authenticate = false;
+  bool firstBinding = false;
+  Uint8List? peerSecret;
   String? reportedSn;
 
   @override
@@ -61,6 +67,8 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   @override
   Future<bool> connect(BmConnectRequest request) async {
     connectCount++;
+    final gate = connectGate;
+    if (gate != null) await gate.future;
     if (!holdConnect) {
       mtus.add(BmMtuChangedResponse(remoteId: request.remoteId, mtu: 185));
       state(request.remoteId, BmConnectionStateEnum.connected);
@@ -155,6 +163,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
         errorCode: 0,
         errorString: ''));
     final method = jsonDecode(utf8.decode(request.value.sublist(2)))['method'];
+    if (firstBinding) return firstBindReply(request, method);
     if (method == 'getStatus' || (authenticate && method == 'verifyIdentity')) {
       final payload = utf8.encode(jsonEncode({
         'method': authenticate
@@ -163,7 +172,10 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
                 : 'verifyIdentityResult')
             : replyMethod,
         'params': authenticate && method == 'getStatus'
-            ? {'random': base64Encode(List.generate(32, (i) => i))}
+            ? {
+                if (reportedSn != null) 'sn': reportedSn,
+                'random': base64Encode(List.generate(32, (i) => i))
+              }
             : {
                 if (reportedSn != null) 'sn': reportedSn,
                 'success': authenticate
@@ -183,6 +195,53 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
           success: true,
           errorCode: 0,
           errorString: ''));
+    }
+    return true;
+  }
+
+  Future<bool> firstBindReply(
+      BmWriteCharacteristicRequest request, String method) async {
+    if (method == 'getStatus' && connectCount == 1) {
+      event(request.remoteId, {
+        'method': 'verifyRequest',
+        'params': {
+          'sn': 'AB00000000000001',
+          'mac': '11:22:33:44:55:66',
+          'encrypted': 'test-only-fresh-challenge'
+        }
+      });
+    } else if (method == 'verifyResult') {
+      final params =
+          jsonDecode(utf8.decode(request.value.sublist(2)))['params'];
+      final key =
+          await X25519().newKeyPairFromSeed(List.generate(32, (i) => i + 1));
+      final public = await key.extractPublicKey();
+      final secret = await X25519().sharedSecretKey(
+          keyPair: key,
+          remotePublicKey: SimplePublicKey(base64Decode(params['public_key']),
+              type: KeyPairType.x25519));
+      peerSecret = Uint8List.fromList(await secret.extractBytes());
+      event(request.remoteId, {
+        'method': 'pairingResult',
+        'params': {
+          'success': params['encrypted_random'] == 'test-only-issued-hmac',
+          'public_key': base64Encode(public.bytes)
+        }
+      });
+    } else if (method == 'getStatus' && connectCount > 1) {
+      event(request.remoteId, {
+        'method': 'verifyIdentityRequest',
+        'params': {'random': base64Encode(List.generate(32, (i) => i))}
+      });
+    } else if (method == 'verifyIdentity') {
+      final params =
+          jsonDecode(utf8.decode(request.value.sublist(2)))['params'];
+      final expected = await RecorderCryptography.answerIdentity(
+          peerSecret!, base64Encode(List.generate(32, (i) => i)));
+      event(request.remoteId, {
+        'method': 'verifyIdentityResult',
+        'params': {'success': params['encrypted'] == expected}
+      });
     }
     return true;
   }
@@ -208,11 +267,14 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   void reset() {
     writes.clear();
     authenticate = false;
+    firstBinding = false;
+    peerSecret = null;
     reportedSn = null;
     connectCount = 0;
     otaOnly = false;
     rejectNotify = false;
     holdConnect = false;
+    connectGate = null;
     replyMethod = 'bindResult';
     replySuccess = false;
   }
@@ -340,6 +402,55 @@ void main() {
   });
 
   test(
+      'login-first connection restores matching account identity and proves possession',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.authenticate = true;
+    platform.reportedSn = 'AB00000000000001';
+    final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
+    addTearDown(binding.clear);
+    final session = RecorderAccountSession(
+        binding.serialNumber,
+        ({required checkContent, required mac, required sn}) async =>
+            throw StateError('No new binding expected'),
+        ({required sn, required mac, required sharedSecret}) async =>
+            throw StateError('No new binding expected'),
+        restoreKey: (id, protocol, sn, store) async {
+      if (!binding.matches(sn, protocol)) return false;
+      await binding.saveForDevice(store, id);
+      return true;
+    });
+    expect(await driver.connectDevice(device, accountSession: session), true);
+    expect(keys.writes, 1);
+    expect(platform.connectCount, 1);
+    expect(driver.snNumber, binding.serialNumber);
+    expect(driver.diagnosticText, isNot(contains(base64Encode(shared))));
+  });
+
+  test('different reported SN cannot consume selected account key', () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.authenticate = true;
+    platform.reportedSn = 'AB00000000000002';
+    var restored = false;
+    final session = RecorderAccountSession(
+        'AB00000000000001',
+        ({required checkContent, required mac, required sn}) async => '',
+        ({required sn, required mac, required sharedSecret}) async {},
+        restoreKey: (id, protocol, sn, store) async {
+      restored = true;
+      return true;
+    });
+    expect(await driver.connectDevice(device, accountSession: session), false);
+    expect(restored, false);
+    expect(keys.writes, 0);
+    expect(driver.lastErrorMessage, contains('SN'));
+  });
+
+  test(
       'verified hardware voice sessions emit complete Ogg before release; abort discards',
       () async {
     await driver.dispose();
@@ -394,7 +505,9 @@ void main() {
     await audio.cancel();
   });
 
-  test('own-account restore requires observed SN/profile and verifies on reconnect', () async {
+  test(
+      'own-account restore requires observed SN/profile and verifies on reconnect',
+      () async {
     await driver.dispose();
     final keys = MemoryKeyStore();
     driver = AiNote6095Driver(keyStore: keys);
@@ -404,7 +517,8 @@ void main() {
     platform.replyMethod = 'verifyRequest';
     platform.reportedSn = matching.serialNumber;
     expect(await driver.connectDevice(device), false);
-    final wrong = OwnedRecorderBinding.fromAccountRecord(record(sn: 'AB00000000000002'))!;
+    final wrong =
+        OwnedRecorderBinding.fromAccountRecord(record(sn: 'AB00000000000002'))!;
     expect(await driver.restoreOwnedBinding(wrong), false);
     expect(keys.writes, 0);
     expect(await driver.restoreOwnedBinding(matching), true);
@@ -440,5 +554,112 @@ void main() {
     await driver.disconnect();
     expect(await result, false);
     expect(platform.connectCount, 0);
+  });
+
+  test(
+      'logged-in first binding commits a fresh key then verifies a real peer challenge on reconnect',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.firstBinding = true;
+    var checks = 0, commits = 0;
+    final session = RecorderAccountSession('AB00000000000001', (
+        {required checkContent, required mac, required sn}) async {
+      expect(checkContent, 'test-only-fresh-challenge');
+      expect(sn, 'AB00000000000001');
+      checks++;
+      return 'test-only-issued-hmac';
+    }, ({required sn, required mac, required sharedSecret}) async {
+      expect(base64Decode(sharedSecret), platform.peerSecret);
+      expect(keys.value, sharedSecret);
+      commits++;
+    });
+    expect(await driver.connectDevice(device, accountSession: session), true);
+    expect(platform.connectCount, 2);
+    expect(checks, 1);
+    expect(commits, 1);
+    expect(keys.writes, 1);
+    expect(driver.isConnected, true);
+    expect(driver.diagnosticText, isNot(contains('test-only-issued-hmac')));
+    expect(driver.diagnosticText, isNot(contains(keys.value!)));
+  });
+
+  test(
+      'cancel during account binding cannot launch an automatic reconnect later',
+      () async {
+    await driver.dispose();
+    driver = AiNote6095Driver(keyStore: MemoryKeyStore());
+    platform.firstBinding = true;
+    final entered = Completer<void>(), pending = Completer<void>();
+    final session = RecorderAccountSession(
+        'AB00000000000001',
+        ({required checkContent, required mac, required sn}) async =>
+            'test-only-issued-hmac',
+        ({required sn, required mac, required sharedSecret}) async {
+      entered.complete();
+      await pending.future;
+    });
+    final result = driver.connectDevice(device, accountSession: session);
+    await entered.future;
+    await driver.disconnect();
+    expect(await result, false);
+    pending.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(platform.connectCount, 1);
+    expect(driver.isConnected, false);
+  });
+
+  test('outer deadline covers a platform connect call that never returns',
+      () async {
+    await driver.dispose();
+    driver = AiNote6095Driver(
+        connectionTimeout: const Duration(milliseconds: 80),
+        cancellationTimeout: const Duration(milliseconds: 20));
+    final gate = Completer<void>();
+    platform.connectGate = gate;
+    try {
+      expect(
+          await driver
+              .connectDevice(device)
+              .timeout(const Duration(seconds: 1)),
+          false);
+      expect(driver.isConnecting, false);
+      expect(driver.isConnected, false);
+      expect(driver.lastErrorMessage, contains('系统连接'));
+      expect(platform.writes, isEmpty);
+    } finally {
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+    // The late connected callback must never advance this expired attempt to GATT.
+    expect(platform.writes, isEmpty);
+    expect(driver.isConnected, false);
+  });
+
+  test(
+      'cancel interrupts the app wait even if the native invocation is stalled',
+      () async {
+    await driver.dispose();
+    driver =
+        AiNote6095Driver(cancellationTimeout: const Duration(milliseconds: 20));
+    final gate = Completer<void>();
+    platform.connectGate = gate;
+    final connecting = driver.connectDevice(device);
+    while (platform.connectCount == 0) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    try {
+      await driver.disconnect().timeout(const Duration(seconds: 1));
+      expect(await connecting.timeout(const Duration(seconds: 1)), false);
+      expect(driver.isConnecting, false);
+      expect(driver.connectionSummary, '已取消本次操作，等待系统断开');
+      expect(platform.writes, isEmpty);
+    } finally {
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
+    expect(driver.isConnected, false);
+    expect(platform.writes, isEmpty);
   });
 }

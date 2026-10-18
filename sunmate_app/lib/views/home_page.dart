@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
+import '../core/ble/yoooclaw_account.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
 import 'recorder_account_sheet.dart';
@@ -24,7 +25,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.15+16 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.16+17 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -391,7 +392,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('蓝牙诊断 · 1.0.15+16', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('蓝牙诊断 · 1.0.16+17', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -427,18 +428,22 @@ void showBleDevicePickerModal(BuildContext context, WidgetRef ref) {
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
-    builder: (ctx) => const _BleDevicePickerModal(),
+    builder: (ctx) => const RecorderConnectionSheet(),
   );
 }
 
-class _BleDevicePickerModal extends ConsumerStatefulWidget {
-  const _BleDevicePickerModal();
+class RecorderConnectionSheet extends ConsumerStatefulWidget {
+  final YoooClawAccount? account;
+  const RecorderConnectionSheet({super.key, this.account});
 
   @override
-  ConsumerState<_BleDevicePickerModal> createState() => _BleDevicePickerModalState();
+  ConsumerState<RecorderConnectionSheet> createState() => _BleDevicePickerModalState();
 }
 
-class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
+class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> {
+  late final YoooClawAccount _account;
+  late final DeviceNotifier _deviceNotifier;
+  AccountRecorderDevice? _selectedAccountDevice;
   bool _isConnecting = false;
   String? _connectingDeviceName;
   String? _connectionError;
@@ -447,7 +452,8 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   @override
   void initState() {
     super.initState();
-    _startScan();
+    _account = widget.account ?? YoooClawAccount();
+    _deviceNotifier = ref.read(deviceProvider.notifier);
     // 监听底层实时诊断日志，逐行驱动 UI 点亮
     _logSub = ref.read(deviceProvider.notifier).logStream.listen((_) {
       if (mounted) setState(() {});
@@ -480,6 +486,10 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   @override
   void dispose() {
     _logSub?.cancel();
+    if (_isConnecting) {
+      unawaited(_deviceNotifier.cancelBleConnection());
+    }
+    _account.close();
     FlutterBluePlus.stopScan();
     super.dispose();
   }
@@ -487,6 +497,25 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
   @override
   Widget build(BuildContext context) {
     final devNotifier = ref.read(deviceProvider.notifier);
+
+    if (_selectedAccountDevice == null) {
+      return Material(color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        clipBehavior: Clip.antiAlias,
+        child: RecorderAccountSheet(account: _account, closeAccountOnDispose: false,
+        onReconnectVerified: devNotifier.canReconnectVerifiedDevice ? () async {
+          _isConnecting = true;
+          final connected = await devNotifier.autoReconnect();
+          if (!mounted) return connected;
+          _isConnecting = false;
+          if (connected) Navigator.of(context).maybePop();
+          return connected;
+        } : null,
+        onSelectDevice: (device) {
+          setState(() => _selectedAccountDevice = device);
+          _startScan();
+        }));
+    }
 
     return Container(
       height: MediaQuery.of(context).size.height * 0.75,
@@ -510,19 +539,36 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Column(
+                Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text("搜索蓝牙录音卡设备",
+                    const Text("搜索蓝牙录音卡设备",
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    SizedBox(height: 2),
-                    Text("请确保 C·ONE / AiNote 6095 处于开机状态",
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const SizedBox(height: 2),
+                    Text('账号 SN：${_selectedAccountDevice!.serialNumber}',
+                        style: const TextStyle(fontSize: 12, color: Colors.grey)),
                   ],
-                ),
+                )),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (devNotifier.supportsAncsRequestConfiguration)
+                      PopupMenuButton<bool>(
+                        tooltip: '蓝牙连接方式',
+                        enabled: !_isConnecting && !devNotifier.isBleConnecting &&
+                            !devNotifier.isBleLinkConnected,
+                        initialValue: devNotifier.requiresAncs,
+                        icon: Icon(devNotifier.requiresAncs
+                            ? Icons.notifications_active_outlined : Icons.mic_none),
+                        onSelected: (value) async {
+                          await devNotifier.configureBleAncsRequest(value);
+                          if (mounted) setState(() {});
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: true, child: Text('录音并请求 iPhone 通知')),
+                          PopupMenuItem(value: false, child: Text('仅录音连接')),
+                        ],
+                      ),
                     IconButton(
                       icon: const Icon(Icons.refresh),
                       tooltip: "重新扫描",
@@ -751,7 +797,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                     style: TextStyle(fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 8),
                                 const Text(
-                                  "提示：\n1. 请确认录音卡处于开机状态；\n2. 若名称包含 C·ONE 或 AiNote，请靠近手机；\n3. 若硬件卡已连其它设备，请长按按键 3 秒重新广播配对。",
+                                  "提示：\n1. 请确认录音卡处于开机状态；\n2. 若名称包含 C·ONE 或 AiNote，请靠近手机；\n3. 若录音卡刚连接过 Android，请先关闭 Android 蓝牙，再重新扫描；无需解绑或重置。",
                                   textAlign: TextAlign.center,
                                   style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
                                 ),
@@ -840,8 +886,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                               ),
                               child: const Text("连接"),
                               onPressed: () async {
-                                // 1. 彻底停止扫描，独占 CoreBluetooth 通道，防止连接被打断
-                                await FlutterBluePlus.stopScan();
+                                if (_isConnecting || devNotifier.isBleConnecting) return;
 
                                 setState(() {
                                   _isConnecting = true;
@@ -849,7 +894,14 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                   _connectionError = null;
                                 });
 
-                                final ok = await devNotifier.connectDevice(item.device);
+                                var ok = false;
+                                String? operationError;
+                                try {
+                                  ok = await devNotifier.connectDevice(item.device,
+                                      accountSession: _account.sessionForDevice(_selectedAccountDevice!));
+                                } catch (_) {
+                                  operationError = '蓝牙操作未完成，请查看并复制诊断日志';
+                                }
 
                                 if (mounted) {
                                   if (ok) {
@@ -868,7 +920,7 @@ class _BleDevicePickerModalState extends ConsumerState<_BleDevicePickerModal> {
                                       );
                                     }
                                   } else {
-                                    final err = devNotifier.lastError ?? "连接握手超时";
+                                    final err = operationError ?? devNotifier.lastError ?? "连接握手超时";
                                     setState(() {
                                       _isConnecting = false;
                                       _connectionError = '${devNotifier.connectionSummary}\n$err';

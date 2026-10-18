@@ -304,4 +304,124 @@ void main() {
     await expectLater(login, throwsA(isA<OfficialAccountException>()));
     expect(client.isLoggedIn, false);
   });
+
+  test(
+      'selected owned device scopes real check and bind requests; credentials stay private',
+      () async {
+    await client.login('13800000000', '1234');
+    await client.loadBindings();
+    final session = client.sessionForDevice(client.devices.single);
+    adapter.respond = (r) => r.path.endsWith('/check')
+        ? response({
+            'code': '000000',
+            'data': {'hmac': 'test-only-issued-hmac'}
+          })
+        : response({'code': '000000'});
+    final hmac = await session.verifier(
+        checkContent: 'test-only-fresh-challenge',
+        mac: '11:22:33:44:55:66',
+        sn: 'AB00000000000001');
+    expect(hmac, 'test-only-issued-hmac');
+    expect(adapter.requests.last.data, {
+      'checkContent': 'test-only-fresh-challenge',
+      'mac': '11:22:33:44:55:66',
+      'sn': 'AB00000000000001'
+    });
+    await session.committer(
+        sn: 'AB00000000000001',
+        mac: '11:22:33:44:55:66',
+        sharedSecret: base64Encode(shared));
+    expect(adapter.requests.last.uri.path,
+        '/api/device/toc/externalDeviceBind/bind');
+    expect(adapter.requests.last.data, {
+      'deviceId': 'AB00000000000001',
+      'deviceName': 'Test recorder',
+      'extInfo': {
+        'mac': '11:22:33:44:55:66',
+        'sharedSecret': base64Encode(shared)
+      }
+    });
+    final count = adapter.requests.length;
+    await expectLater(
+        session.verifier(
+            checkContent: 'challenge', mac: 'mac', sn: 'AB00000000000002'),
+        throwsA(isA<OfficialAccountException>()));
+    expect(adapter.requests.length, count);
+    final diagnostic = client.diagnostics.join('\n');
+    client.close();
+    await expectLater(
+        session.verifier(
+            checkContent: 'challenge', mac: 'mac', sn: 'AB00000000000001'),
+        throwsA(isA<OfficialAccountException>()));
+    expect(adapter.requests.length, count);
+    for (final value in [
+      'test-only-issued-hmac',
+      'test-only-fresh-challenge',
+      base64Encode(shared)
+    ]) {
+      expect(diagnostic, isNot(contains(value)));
+    }
+  });
+
+  test(
+      'account key restore requires observed SN and protocol; never replaces an existing identity',
+      () async {
+    await client.login('13800000000', '1234');
+    await client.loadBindings();
+    final session = client.sessionForDevice(client.devices.single);
+    final store = MemoryKeyStore();
+    await expectLater(
+        session.restoreKey!(
+            'recorder', RecorderProtocol.telink, 'AB00000000000002', store),
+        throwsA(isA<OfficialAccountException>()));
+    expect(store.value, isNull);
+    expect(
+        await session.restoreKey!(
+            'recorder', RecorderProtocol.aiNote6095, 'AB00000000000001', store),
+        false);
+    expect(store.value, isNull);
+    expect(
+        await session.restoreKey!(
+            'recorder', RecorderProtocol.telink, 'AB00000000000001', store),
+        true);
+    expect(store.value, base64Encode(shared));
+    store.value = base64Encode(List.filled(32, 42));
+    await expectLater(
+        session.restoreKey!(
+            'recorder', RecorderProtocol.telink, 'AB00000000000001', store),
+        throwsStateError);
+    expect(store.value, base64Encode(List.filled(32, 42)));
+  });
+
+  test(
+      'missing cloud key still permits owned-device selection, duplicate SN does not',
+      () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (_) => response({
+          'code': '000000',
+          'data': {
+            'deviceList': [
+              {
+                'externalDeviceId': 'AB00000000000001',
+                'externalDeviceName': 'My recorder',
+                'extInfo': {}
+              }
+            ]
+          }
+        });
+    expect(await client.loadBindings(), isEmpty);
+    final selected = client.devices.single;
+    final oldSession = client.sessionForDevice(selected);
+    adapter.respond = (_) => response({
+          'code': '000000',
+          'data': {'deviceList': []}
+        });
+    await client.loadBindings();
+    expect(() => client.sessionForDevice(selected),
+        throwsA(isA<OfficialAccountException>()));
+    await expectLater(
+        oldSession.verifier(
+            checkContent: 'challenge', mac: 'mac', sn: selected.serialNumber),
+        throwsA(isA<OfficialAccountException>()));
+  });
 }

@@ -93,6 +93,20 @@ class SecureRecorderKeyStore implements RecorderKeyStore {
 typedef ManufacturerVerifier = Future<String> Function(
     {required String checkContent, required String mac, required String sn});
 
+typedef PairingCommitter = Future<void> Function(
+    {required String sn, required String mac, required String sharedSecret});
+
+/// 一次账号设备选择的能力；会话与密钥不出现在诊断或 toString 中。
+class RecorderAccountSession {
+  final String serialNumber;
+  final ManufacturerVerifier verifier;
+  final PairingCommitter committer;
+  final Future<bool> Function(String deviceId, RecorderProtocol protocol,
+      String detectedSerial, RecorderKeyStore store)? restoreKey;
+  RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
+      {this.restoreKey});
+}
+
 enum RecorderAuthenticationState {
   idle,
   awaitingManufacturer,
@@ -108,10 +122,13 @@ class RecorderAuthentication {
   final String deviceId;
   final RecorderKeyStore store;
   final ManufacturerVerifier? verifier;
+  final PairingCommitter? committer;
   final RecorderCryptography _crypto;
   RecorderAuthenticationState state = RecorderAuthenticationState.idle;
   SimpleKeyPair? _phoneKey;
   Uint8List? _sharedSecret;
+  String? _verifiedSn;
+  String? _verifiedMac;
   bool _active = true;
 
   RecorderAuthentication({
@@ -119,6 +136,7 @@ class RecorderAuthentication {
     required this.deviceId,
     required this.store,
     this.verifier,
+    this.committer,
     RecorderCryptography? cryptography,
   }) : _crypto = cryptography ?? RecorderCryptography();
 
@@ -143,6 +161,9 @@ class RecorderAuthentication {
       throw StateError('拒绝重复或错序的厂商挑战');
     }
     _checkActive();
+    if (_sharedSecret != null) {
+      throw StateError('本机已有共享密钥；不自动重新协商或覆盖，请保留诊断');
+    }
     final provider = verifier;
     if (provider == null) {
       throw StateError('需要自己的官方账号绑定材料或合法厂商验机接口；未发送假凭证');
@@ -158,6 +179,8 @@ class RecorderAuthentication {
     final encrypted = requireField('encrypted');
     final mac = requireField('mac');
     final sn = requireField('sn');
+    _verifiedSn = sn;
+    _verifiedMac = mac;
     state = RecorderAuthenticationState.awaitingManufacturer;
     final hmac =
         (await provider(checkContent: encrypted, mac: mac, sn: sn)).trim();
@@ -190,10 +213,21 @@ class RecorderAuthentication {
     }
     final secret = await _crypto.sharedSecret(phoneKey, params['public_key']);
     _checkActive();
+    final existing = await store.read(deviceId, protocol);
+    _checkActive();
+    if (existing != null) throw StateError('安全存储中已有密钥，未覆盖');
     await store.write(deviceId, protocol, base64Encode(secret));
     _checkActive();
     _sharedSecret = secret;
     _phoneKey = null;
+    final commit = committer;
+    if (commit != null) {
+      await commit(
+          sn: _verifiedSn!,
+          mac: _verifiedMac!,
+          sharedSecret: base64Encode(secret));
+      _checkActive();
+    }
     // 还需一次设备挑战确认双方确实持有同一密钥，不在公钥交换时报告就绪。
     state = RecorderAuthenticationState.keyNegotiated;
   }

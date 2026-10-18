@@ -22,13 +22,19 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final _audioReceiver = OpusStreamReceiver();
   final RecorderKeyStore _keyStore;
   final ManufacturerVerifier? _verifier;
+  final Duration connectionTimeout;
+  final Duration cancellationTimeout;
   RecorderAuthentication? _authentication;
+  RecorderAccountSession? _activeAccountSession;
   Future<void> _eventWork = Future.value();
   bool _hasSharedKey = false;
+  bool _hasVerifiedDevice = false;
   bool _channelsReady = false;
   bool _identityVerified = false;
   bool _sawAuthenticationEvent = false;
   bool _restoringIdentity = false;
+  bool _needsIdentityReconnect = false;
+  bool _cancelReconnect = false;
   int? _voiceSession;
   final _buttonEvents = StreamController<DeviceButtonEvent>.broadcast();
   final _audioPackets = StreamController<AudioDataPacket>.broadcast();
@@ -45,6 +51,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   RecorderProfile? _profile;
   RecorderEventDecoder? _decoder;
   Future<bool>? _connectionOperation;
+  Future<void>? _disconnectOperation;
+  Completer<void>? _connectCancellation;
   String? _connectingId;
   Completer<bool>? _ready;
   Timer? _saveTimer;
@@ -65,8 +73,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Uint8List? _lastRecordedBytes;
   String? lastErrorMessage;
 
-  AiNote6095Driver({RecorderKeyStore? keyStore, ManufacturerVerifier? verifier})
-      : _keyStore = keyStore ?? SecureRecorderKeyStore(),
+  AiNote6095Driver({
+    RecorderKeyStore? keyStore,
+    ManufacturerVerifier? verifier,
+    this.connectionTimeout = const Duration(seconds: 90),
+    this.cancellationTimeout = const Duration(seconds: 5),
+  })  : _keyStore = keyStore ?? SecureRecorderKeyStore(),
         _verifier = verifier {
     _initialization = _loadPreferences();
     _receiverSub = _audioReceiver.audioStream.listen((packet) {
@@ -90,8 +102,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool get isConnected => _isConnected;
   bool get isLinkConnected =>
       _linkEstablished && (_device?.isConnected ?? false);
-  bool get isConnecting => _connectionOperation != null || _restoringIdentity;
+  bool get isConnecting =>
+      _connectionOperation != null ||
+      _disconnectOperation != null ||
+      _restoringIdentity;
   bool get requiresAncs => _requiresAncs;
+  bool get hasVerifiedDevice => _hasVerifiedDevice;
+  bool get supportsAncsRequestConfiguration => _ios.isSupported;
   bool? get ancsAuthorized => _ancsAuthorized;
   String get connectionSummary => _phase;
   @override
@@ -110,7 +127,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.15+16',
+        'SunMate 1.0.16+17',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备上报 SN: $_serialNumber',
@@ -122,6 +139,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<void> _loadPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     _requiresAncs = prefs.getBool(_ancsKey) ?? true;
+    _hasVerifiedDevice = prefs.getString(_lastIdKey) != null;
     _connectionLogs.addAll(prefs.getStringList(_diagnosticsKey) ?? []);
     if (!_disposed) _stateChanges.add(null);
   }
@@ -165,16 +183,19 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   /// 同一次连接只允许一个流程；自动重连与点击连接不能互相覆盖。
   Future<bool> connectDevice(BluetoothDevice device,
-      {bool isAutoReconnect = false}) {
+      {bool isAutoReconnect = false, RecorderAccountSession? accountSession}) {
     if (_disposed) return Future.value(false);
-    if (_restoringIdentity) return Future.value(false);
+    if (_restoringIdentity || _disconnectOperation != null)
+      return Future.value(false);
     if (_connectionOperation != null) {
       if (_connectingId == device.remoteId.str) return _connectionOperation!;
       _log('另一个连接正在进行，请先取消');
       return Future.value(false);
     }
     _connectingId = device.remoteId.str;
-    final operation = _connectDevice(device, isAutoReconnect);
+    _cancelReconnect = false;
+    final operation =
+        _connectAccountDevice(device, isAutoReconnect, accountSession);
     _connectionOperation = operation;
     unawaited(operation.whenComplete(() {
       if (_connectionOperation == operation) {
@@ -186,19 +207,53 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     return operation;
   }
 
-  Future<bool> _connectDevice(BluetoothDevice device, bool automatic) async {
+  Future<bool> _connectAccountDevice(BluetoothDevice device, bool automatic,
+      RecorderAccountSession? session) async {
+    final expectedGeneration = _generation + 1;
+    final connected =
+        await _connectDevice(device, automatic, accountSession: session);
+    if (connected ||
+        session == null ||
+        _cancelReconnect ||
+        expectedGeneration != _generation ||
+        _disposed) return connected;
+    if (!_needsIdentityReconnect) {
+      final error = lastErrorMessage;
+      await _startDisconnect();
+      if (_generation == expectedGeneration + 1 && !_cancelReconnect) {
+        lastErrorMessage = error;
+      }
+      return false;
+    }
+    _log('真实密钥已保存且账号已同步；断开一次，用新挑战验证后才报告连接成功');
+    await _startDisconnect(reconnecting: true);
+    if (_cancelReconnect || _generation != expectedGeneration + 1 || _disposed)
+      return false;
+    return _connectDevice(device, true, retainDiagnostics: true);
+  }
+
+  Future<bool> _connectDevice(BluetoothDevice device, bool automatic,
+      {RecorderAccountSession? accountSession,
+      bool retainDiagnostics = false}) async {
     final generation = ++_generation;
+    final cancellation = Completer<void>();
+    _connectCancellation = cancellation;
+    Timer? progress;
     try {
       await _initialization;
       _checkGeneration(generation);
-      _clock = Stopwatch()..start();
-      _connectionLogs.clear();
+      if (!retainDiagnostics) {
+        _clock = Stopwatch()..start();
+        _connectionLogs.clear();
+      }
       lastErrorMessage = null;
       _manualDisconnect = false;
       _isConnected = false;
       _channelsReady = false;
       _identityVerified = false;
       _sawAuthenticationEvent = false;
+      _needsIdentityReconnect = false;
+      _activeAccountSession = accountSession;
       _authentication?.cancel();
       _eventWork = Future.value();
       _voiceSession = null;
@@ -219,7 +274,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _device = device;
       _deviceName =
           device.platformName.isNotEmpty ? device.platformName : '录音卡';
-      _log('${automatic ? "恢复已验证设备" : "用户选择设备"}: ${device.remoteId.str}');
+      _log('${automatic ? "按已保存的身份重连" : "用户选择设备"}: ${device.remoteId.str}');
       for (final result in FlutterBluePlus.lastScanResults
           .where((r) => r.device.remoteId == device.remoteId)) {
         final adv = result.advertisementData;
@@ -240,10 +295,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           }
         }, onError: (Object error) => _log('原生诊断订阅失败: $error')));
         await _ios.configure(device.remoteId.str, requiresAncs: _requiresAncs);
-        _log('原生连接选项 RequiresANCS=$_requiresAncs；请处理系统配对/通知授权');
+        _log('原生连接选项 RequiresANCS=$_requiresAncs（仅请求选项，不代表系统弹窗已出现）');
       }
       _checkGeneration(generation);
       _phase = '系统连接与授权';
+      _log(
+          '等待系统连接回调，最长 ${connectionTimeout.inSeconds} 秒；请确保 Android 等其它设备已断开这张卡');
       _subscriptions.add(device.connectionState.listen((state) {
         if (generation != _generation || _disposed) return;
         if (state == BluetoothConnectionState.connected) {
@@ -270,8 +327,21 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           unawaited(_readNativeDiagnostics(device, generation));
         }
       }));
-      await device.connect(
-          autoConnect: false, timeout: const Duration(seconds: 90));
+      final waiting = Stopwatch()..start();
+      progress = Timer.periodic(const Duration(seconds: 10), (_) {
+        if (generation != _generation || _disposed || _linkEstablished) return;
+        _log('仍在等待系统连接：${waiting.elapsed.inSeconds} 秒；尚未收到 connected 回调');
+        unawaited(_readNativeDiagnostics(device, generation));
+      });
+      try {
+        // 插件的计时从原生 connect 调用返回后开始；外层同时覆盖队列和平台调用。
+        await Future.any<void>([
+          device.connect(autoConnect: false, timeout: connectionTimeout),
+          cancellation.future.then<void>((_) => throw StateError('连接已取消')),
+        ]).timeout(connectionTimeout);
+      } finally {
+        progress.cancel();
+      }
       _checkGeneration(generation);
       _linkEstablished = device.isConnected;
       if (!_linkEstablished) throw StateError('连接调用完成后链路已断开');
@@ -302,7 +372,28 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         protocol: profile.protocol,
         deviceId: device.remoteId.str,
         store: _keyStore,
-        verifier: _verifier,
+        verifier: accountSession == null
+            ? _verifier
+            : ({required checkContent, required mac, required sn}) async {
+                _checkGeneration(generation);
+                _log('使用已登录的自有账号请求真实验机答复');
+                final hmac = await accountSession.verifier(
+                    checkContent: checkContent, mac: mac, sn: sn);
+                _checkGeneration(generation);
+                _log('官方验机答复已通过响应检查；内容不进入日志');
+                return hmac;
+              },
+        committer: accountSession == null
+            ? null
+            : ({required sn, required mac, required sharedSecret}) async {
+                _checkGeneration(generation);
+                _phase = '同步官方账号绑定';
+                _log('正在同步当前设备的新绑定资料；密钥不进入日志');
+                await accountSession.committer(
+                    sn: sn, mac: mac, sharedSecret: sharedSecret);
+                _checkGeneration(generation);
+                _log('新绑定资料已同步到自己的官方账号');
+              },
       );
       _hasSharedKey = await _authentication!.loadKey();
       _checkGeneration(generation);
@@ -386,22 +477,27 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       return _isConnected && isLinkConnected;
     } catch (error) {
       if (generation != _generation || _disposed) return false;
-      lastErrorMessage = '$error';
+      lastErrorMessage = error is TimeoutException && _phase == '系统连接与授权'
+          ? '系统连接在 ${connectionTimeout.inSeconds} 秒内未完成，已请求取消；请关闭其它设备的蓝牙后重试'
+          : '$error';
       _phase = '连接未完成';
-      _log('连接错误: $error');
-      // 未知 profile/订阅失败不能留下可继续操作的半初始化连接。
-      if (device.isConnected) {
-        try {
-          await device.disconnect(queue: false);
-        } catch (disconnectError) {
-          _log('断开失败: $disconnectError');
-        }
-      }
+      _log('连接错误: $lastErrorMessage');
+      // pending 连接即使 isConnected=false 也必须请求取消。
+      await _cancelNativeConnection(device);
+      if (generation != _generation || _disposed) return false;
       await _readNativeDiagnostics(device, generation);
+      if (generation != _generation || _disposed) return false;
+      await _clearSubscriptions();
+      if (generation != _generation || _disposed) return false;
       _isConnected = false;
       _linkEstablished = false;
       _finishWaiting(false);
       return false;
+    } finally {
+      progress?.cancel();
+      if (identical(_connectCancellation, cancellation)) {
+        _connectCancellation = null;
+      }
     }
   }
 
@@ -416,7 +512,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   void _handleNativeEvent(Map<String, dynamic> event) {
     if (event['ancs_authorized'] is bool)
       _ancsAuthorized = event['ancs_authorized'] as bool;
-    _log('iOS event=${event["event"]} nativeTime=${event["timestamp_ms"]} '
+    const states = {
+      0: 'disconnected',
+      1: 'connecting',
+      2: 'connected',
+      3: 'disconnecting'
+    };
+    _log(
+        'iOS event=${event["event"]} state=${states[event["state"]] ?? "unknown"} nativeTime=${event["timestamp_ms"]} '
         'ANCS=${event["ancs_authorized"]} domain=${event["error_domain"]} '
         'code=${event["error_code"]} description=${event["error_description"]}');
   }
@@ -482,9 +585,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         _authentication?.cancel();
         _cancelVoice();
         _phase = '业务鉴权未完成';
-        lastErrorMessage = _verifier == null && !_hasSharedKey
+        lastErrorMessage = _authentication?.verifier == null && !_hasSharedKey
             ? '需要自己的官方账号绑定材料或合法厂商验机接口；未发送假凭证'
-            : '业务鉴权失败或设备材料无效；未报告连接成功';
+            : error is OfficialAccountException
+                ? error.message
+                : '业务鉴权失败或设备材料无效；未报告连接成功';
         _log(lastErrorMessage!);
         _finishWaiting(false);
       });
@@ -503,6 +608,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _serialNumber = params['sn'] as String;
       final id = _device?.remoteId.str;
       if (id != null) _reportedSerials[id] = _serialNumber;
+      if (_activeAccountSession != null &&
+          _serialNumber != _activeAccountSession!.serialNumber) {
+        throw const OfficialAccountException('卡片上报的 SN 与所选账号设备不一致，未继续鉴权');
+      }
     }
     if (method == 'verifyRequest') {
       _phase = '厂商验机';
@@ -511,6 +620,16 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       await _sendJson(reply, 'verifyResult（合法验机答复）');
     } else if (method == 'verifyIdentityRequest') {
       _phase = '本地共享密钥验证';
+      final restore = _activeAccountSession?.restoreKey;
+      if (!_hasSharedKey && restore != null && _serialNumber != '--') {
+        if (await restore(_device!.remoteId.str, _profile!.protocol,
+            _serialNumber, _keyStore)) {
+          _checkGeneration(generation);
+          _hasSharedKey = await _authentication!.loadKey();
+          _checkGeneration(generation);
+          _log('已恢复与实际 SN 和协议匹配的账号密钥；仍需本次挑战验证');
+        }
+      }
       final reply = await _authentication!.answerIdentity(params,
           timestampSeconds: DateTime.now().millisecondsSinceEpoch ~/ 1000);
       _checkGeneration(generation);
@@ -548,6 +667,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _hasSharedKey = true;
       _phase = '共享密钥已保存，等待身份挑战';
       _log('X25519 协商完成并已安全保存；若设备未再发挑战，请重连验证');
+      _needsIdentityReconnect = _authentication!.committer != null;
+      if (_needsIdentityReconnect) _finishWaiting(false);
     } else if (method == 'bindResult') {
       _log('绑定阶段回执不等同于身份验证成功；仍等待完整业务鉴权');
     } else if (method == 'voiceCmd' &&
@@ -624,6 +745,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     await prefs.setString(_lastIdKey, device.remoteId.str);
     await prefs.setString(_lastNameKey, _deviceName);
     if (_serialNumber != '--') await prefs.setString(_lastSnKey, _serialNumber);
+    _hasVerifiedDevice = true;
   }
 
   bool canRestoreBinding(OwnedRecorderBinding binding) =>
@@ -665,10 +787,15 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   }
 
   Future<void> _clearSubscriptions() async {
-    for (final sub in _subscriptions) {
-      await sub.cancel();
-    }
+    final subscriptions = List<StreamSubscription<dynamic>>.of(_subscriptions);
     _subscriptions.clear();
+    await Future.wait(subscriptions.map((sub) async {
+      try {
+        await sub.cancel().timeout(cancellationTimeout);
+      } catch (_) {
+        _log('订阅清理未收到确认；旧回调受连接代次限制，不能完成新连接');
+      }
+    }));
     _decoder?.reset();
   }
 
@@ -677,21 +804,53 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _device != null ? connectDevice(_device!) : autoReconnectLastDevice();
 
   @override
-  Future<void> disconnect() async {
+  Future<void> disconnect() {
+    _cancelReconnect = true;
+    return _startDisconnect();
+  }
+
+  Future<void> _startDisconnect({bool reconnecting = false}) {
+    final pending = _disconnectOperation;
+    if (pending != null) return pending;
+    final operation = _disconnect(reconnecting: reconnecting);
+    _disconnectOperation = operation;
+    unawaited(operation.whenComplete(() {
+      if (_disconnectOperation == operation) {
+        _disconnectOperation = null;
+        if (!_disposed) _stateChanges.add(null);
+      }
+    }));
+    return operation;
+  }
+
+  Future<bool> _cancelNativeConnection(BluetoothDevice device) async {
+    try {
+      await device
+          .disconnect(
+              queue: false, timeout: cancellationTimeout.inSeconds.clamp(1, 35))
+          .timeout(cancellationTimeout);
+      return true;
+    } catch (_) {
+      _log('取消已请求，但系统尚未确认断开；本次操作不再等待，不等同于已释放物理链路');
+      return false;
+    }
+  }
+
+  Future<void> _disconnect({bool reconnecting = false}) async {
     _manualDisconnect = true;
     ++_generation;
+    final cancellation = _connectCancellation;
+    if (cancellation != null && !cancellation.isCompleted)
+      cancellation.complete();
     _authentication?.cancel();
     _cancelVoice();
     _finishWaiting(false);
-    _phase = '用户取消连接';
+    _phase = reconnecting ? '重连验证共享密钥' : '用户取消连接';
     _log('已请求断开；不会清除系统 bond 或恢复出厂');
     final device = _device;
+    var acknowledged = true;
     if (device != null) {
-      try {
-        await device.disconnect(queue: false);
-      } catch (error) {
-        _log('断开提示: $error');
-      }
+      acknowledged = await _cancelNativeConnection(device);
       await _readNativeDiagnostics(device, _generation);
     }
     await _clearSubscriptions();
@@ -701,12 +860,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _isPaused = false;
     _command = null;
     _profile = null;
-    _phase = '已断开';
-    _log('连接已结束');
+    _phase = acknowledged ? '已断开' : '已取消本次操作，等待系统断开';
+    _log(acknowledged ? '连接已结束' : '操作等待已结束，未报告连接成功');
   }
 
   Future<void> unpairDevice() async {
     await disconnect();
+    _hasVerifiedDevice = false;
     final prefs = await SharedPreferences.getInstance();
     for (final key in [
       _lastIdKey,

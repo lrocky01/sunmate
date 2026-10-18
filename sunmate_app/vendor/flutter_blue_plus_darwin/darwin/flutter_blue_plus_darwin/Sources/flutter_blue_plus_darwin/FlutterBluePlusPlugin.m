@@ -476,6 +476,8 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
             // add to currently connecting peripherals
             [self.currentlyConnectingPeripherals setObject:peripheral forKey:remoteId];
 
+            [self sunmateRecord:@"connect_requested" peripheral:peripheral error:nil];
+
             result(@YES);
         }
         else if ([@"disconnect" isEqualToString:call.method])
@@ -502,6 +504,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
             }
 
             // disconnect
+            [self sunmateRecord:@"cancel_requested" peripheral:peripheral error:nil];
             [self.centralManager cancelPeripheralConnection:peripheral];
 
             result(@YES);

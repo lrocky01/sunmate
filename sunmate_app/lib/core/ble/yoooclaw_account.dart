@@ -88,10 +88,36 @@ class OfficialAccountException implements Exception {
   String toString() => message;
 }
 
+class AccountRecorderDevice {
+  final String serialNumber;
+  final String deviceName;
+  final String? uuid;
+  AccountRecorderDevice._(this.serialNumber, this.deviceName, this.uuid);
+
+  static AccountRecorderDevice? fromRecord(Map<String, dynamic> record) {
+    final serial = record['externalDeviceId'];
+    if (serial is! String ||
+        !RegExp(r'^[A-Za-z]{2}[0-9]{14}$').hasMatch(serial.trim())) return null;
+    final name = record['externalDeviceName'];
+    final info = record['extInfo'];
+    final uuid = info is Map ? info['uuid'] : null;
+    return AccountRecorderDevice._(
+        serial.trim().toUpperCase(),
+        name is String && name.isNotEmpty && name.length <= 64 ? name : '我的录音卡',
+        uuid is String &&
+                RegExp(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$')
+                    .hasMatch(uuid)
+            ? uuid
+            : null);
+  }
+}
+
 enum OfficialAccountStage {
   sms('获取验证码'),
   login('验证码登录'),
-  devices('读取设备列表');
+  devices('读取设备列表'),
+  verification('官方验机'),
+  binding('同步账号绑定');
 
   final String label;
   const OfficialAccountStage(this.label);
@@ -107,6 +133,9 @@ class YoooClawAccount {
   String? _userId;
   bool _closed = false;
   List<OwnedRecorderBinding> _bindings = [];
+  List<AccountRecorderDevice> _devices = [];
+  List<AccountRecorderDevice> get devices => List.unmodifiable(_devices);
+  int _revision = 0;
   final List<String> _diagnostics = [];
   List<String> get diagnostics => List.unmodifiable(_diagnostics);
   int totalDevices = 0;
@@ -243,6 +272,7 @@ class YoooClawAccount {
       throw const OfficialAccountException('请输入正确的手机号和 4 位验证码');
     }
     _token = null;
+    _revision++;
     _userId = null;
     _clearBindings();
     final result = await _post(
@@ -286,6 +316,7 @@ class YoooClawAccount {
       throw const OfficialAccountException('账号设备列表缺失或格式不兼容');
     }
     _clearBindings();
+    _revision++;
     totalDevices = records.length;
     final counts = <String, int>{};
     for (final record in records) {
@@ -310,19 +341,100 @@ class YoooClawAccount {
       if (ambiguous) b.clear();
       return ambiguous;
     });
+    _devices = records
+        .whereType<Map<String, dynamic>>()
+        .map(AccountRecorderDevice.fromRecord)
+        .whereType<AccountRecorderDevice>()
+        .where((device) => counts[device.serialNumber] == 1)
+        .toList();
     _appendDiagnostic('设备资料：记录 $totalDevices；可恢复 ${_bindings.length}；'
         'sharedSecret 字段缺失 $missingSharedSecretDevices');
     return List.unmodifiable(_bindings);
   }
 
+  RecorderAccountSession sessionForDevice(AccountRecorderDevice selected) {
+    final serial = selected.serialNumber;
+    final revision = _revision;
+    String? checkedMac;
+    void ensureCurrent(String sn) {
+      if (!isLoggedIn ||
+          revision != _revision ||
+          sn != serial ||
+          !_devices.any((device) => device.serialNumber == serial)) {
+        throw const OfficialAccountException('账号已关闭、资料已更新或设备不匹配，请重新选择');
+      }
+    }
+
+    ensureCurrent(serial);
+    return RecorderAccountSession(serial, (
+        {required checkContent, required mac, required sn}) async {
+      ensureCurrent(sn);
+      if (checkContent.isEmpty ||
+          checkContent.length > 2048 ||
+          mac.isEmpty ||
+          mac.length > 128) {
+        throw const OfficialAccountException('设备挑战格式无效');
+      }
+      final result = await _post(
+          deviceService, '/api/device/toc/externalDeviceBind/check',
+          stage: OfficialAccountStage.verification,
+          authenticated: true,
+          data: {'checkContent': checkContent, 'mac': mac, 'sn': sn});
+      ensureCurrent(sn);
+      _requireSuccess(result, stage: OfficialAccountStage.verification);
+      final data = result['data'];
+      final hmac = data is Map ? data['hmac'] : null;
+      if (hmac is! String || hmac.trim().isEmpty || hmac.length > 2048) {
+        throw const OfficialAccountException('官方验机未返回有效答复');
+      }
+      checkedMac = mac;
+      return hmac.trim();
+    }, ({required sn, required mac, required sharedSecret}) async {
+      ensureCurrent(sn);
+      if (checkedMac != mac) {
+        throw const OfficialAccountException('缺少同一设备的真实验机结果，未同步绑定');
+      }
+      RecorderCryptography.decode32(sharedSecret);
+      if (mac.isEmpty || mac.length > 128) {
+        throw const OfficialAccountException('设备未提供有效 MAC，未同步绑定');
+      }
+      final result = await _post(
+          deviceService, '/api/device/toc/externalDeviceBind/bind',
+          stage: OfficialAccountStage.binding,
+          authenticated: true,
+          data: {
+            'deviceId': serial,
+            'deviceName': selected.deviceName,
+            'extInfo': {
+              'mac': mac,
+              'sharedSecret': sharedSecret,
+              if (selected.uuid != null) 'uuid': selected.uuid
+            }
+          });
+      ensureCurrent(sn);
+      _requireSuccess(result, stage: OfficialAccountStage.binding);
+    }, restoreKey: (deviceId, protocol, detectedSerial, store) async {
+      ensureCurrent(detectedSerial);
+      final candidates = _bindings
+          .where((binding) => binding.matches(detectedSerial, protocol))
+          .toList();
+      if (candidates.length != 1) return false;
+      await candidates.single.saveForDevice(store, deviceId);
+      ensureCurrent(detectedSerial);
+      return true;
+    });
+  }
+
   void _clearBindings() {
     for (final binding in _bindings) binding.clear();
     _bindings = [];
+    _devices = [];
     totalDevices = 0;
     missingSharedSecretDevices = 0;
   }
 
   void close() {
+    _revision++;
     _closed = true;
     _token = null;
     _userId = null;
