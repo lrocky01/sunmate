@@ -151,7 +151,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.21+22',
+        'SunMate 1.0.22+23',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备匹配 SN: $_serialNumber；来源: $_serialSource',

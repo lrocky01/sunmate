@@ -33,6 +33,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
   Timer? _timer;
   int _seconds = 0;
   bool _busy = false;
+  bool _confirmingUnbind = false;
   String _status = '';
 
   @override
@@ -129,6 +130,51 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
             : notifier.lastError ?? '尚未通过设备身份验证，请保留蓝牙诊断日志');
       });
 
+  bool _hardwareIdle() {
+    if (!mounted) return false;
+    final notifier = ref.read(deviceProvider.notifier);
+    return !notifier.isBleLinkConnected &&
+        !notifier.isBleConnecting &&
+        !notifier.activeDriver.isRecording &&
+        !notifier.activeDriver.isPaused;
+  }
+
+  Future<void> _confirmUnbind(AccountRecorderDevice device) => _run(() async {
+        if (!_hardwareIdle() || !_account.canUnbindDevice(device)) {
+          throw const OfficialAccountException('请先结束录音和蓝牙连接，再重新读取设备');
+        }
+        setState(() => _confirmingUnbind = true);
+        bool? confirmed;
+        try {
+          confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+                  title: const Text('解绑账号设备？'),
+                  content: SingleChildScrollView(
+                      child: Text(
+                          '${device.deviceName}\nSN：${device.serialNumber}\n\n'
+                          '将删除这张卡在官方账号中的绑定记录。提交前会安全备份账号恢复资料，本机旧密钥保留。\n\n'
+                          '当前未连接，不会清除卡内数据或系统配对。后续重新绑定可能影响未同步录音，请先确认已备份。')),
+                  actions: [
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('取消')),
+                    TextButton(
+                        style: TextButton.styleFrom(
+                            foregroundColor:
+                                Theme.of(context).colorScheme.error),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('备份并解绑账号设备')),
+                  ],
+                ));
+        } finally {
+          if (mounted) setState(() => _confirmingUnbind = false);
+        }
+        if (confirmed != true || !mounted) return;
+        await _account.unbindDevice(device, canProceed: _hardwareIdle);
+        await _loadBindings();
+      });
+
   @override
   void dispose() {
     _timer?.cancel();
@@ -163,7 +209,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.bold))),
                   IconButton(
-                      onPressed: () => Navigator.pop(context),
+                      onPressed: _busy ? null : () => Navigator.pop(context),
                       tooltip: '关闭',
                       icon: const Icon(Icons.close)),
                 ]),
@@ -260,7 +306,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                       }),
                       child: const Text('退出官方账号')),
                 ],
-                if (_busy)
+                if (_busy && !_confirmingUnbind)
                   const Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
                       child: LinearProgressIndicator()),
@@ -268,6 +314,10 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                   Padding(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       child: Text(_status)),
+                if (_account.unbindNotice != null)
+                  Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(_account.unbindNotice!)),
                 if (_account.diagnostics.isNotEmpty) ...[
                   SelectableText(_account.diagnostics.join('\n'),
                       style: const TextStyle(fontSize: 11)),
@@ -281,7 +331,9 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                   if (widget.onAddDevice != null) ...[
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
-                        onPressed: _busy ? null : widget.onAddDevice,
+                        onPressed: _busy || _account.hasPendingUnbind
+                            ? null
+                            : widget.onAddDevice,
                         icon: const Icon(Icons.add),
                         label: const Text('添加新录音卡')),
                     const Text('用于账号列表中尚无记录的卡片。已有设备请选择下方记录；添加不会自动解绑或重置卡片。'),
@@ -298,9 +350,23 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                     RecorderAccountDeviceInfo(device: device),
                     const SizedBox(height: 12),
                     FilledButton(
-                        onPressed:
-                            _busy ? null : () => widget.onSelectDevice!(device),
+                        onPressed: _busy || _account.hasPendingUnbind
+                            ? null
+                            : () => widget.onSelectDevice!(device),
                         child: const Text('选择并搜索')),
+                    TextButton(
+                        style: TextButton.styleFrom(
+                            foregroundColor:
+                                Theme.of(context).colorScheme.error),
+                        onPressed: _busy ||
+                                !_hardwareIdle() ||
+                                !_account.canUnbindDevice(device)
+                            ? null
+                            : () => _confirmUnbind(device),
+                        child: const Text('解绑账号设备')),
+                    if (!_hardwareIdle()) const Text('请先结束录音和蓝牙连接，再解绑账号设备。'),
+                    if (!device.hasMac || !device.hasRecoverableKey)
+                      const Text('账号恢复资料不完整，暂不能安全备份并解绑。'),
                   ],
                 ],
                 if (widget.onSelectDevice == null)

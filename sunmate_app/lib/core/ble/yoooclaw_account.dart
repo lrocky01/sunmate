@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'ble_protocol.dart';
 import 'recorder_authentication.dart';
 import 'official_account_session_store.dart';
+import 'recorder_binding_backup_store.dart';
 
 /// 仅使用用户自己登录后取得的绑定资料；不负责录音、转写或代理 AI 请求。
 class OwnedRecorderBinding {
@@ -94,7 +95,8 @@ class AccountRecorderDevice {
   final String deviceName;
   final String? uuid;
   final String protocolLabel;
-  final bool hasMac;
+  final String? _mac;
+  bool get hasMac => _mac != null;
   final bool hasSharedSecretField;
   final bool hasRecoverableKey;
   final bool hasStructuredBindingInfo;
@@ -103,7 +105,7 @@ class AccountRecorderDevice {
       this.deviceName,
       this.uuid,
       this.protocolLabel,
-      this.hasMac,
+      this._mac,
       this.hasSharedSecretField,
       this.hasRecoverableKey,
       this.hasStructuredBindingInfo);
@@ -144,7 +146,9 @@ class AccountRecorderDevice {
             ? uuid
             : null,
         protocol ?? safeType,
-        mac is String && mac.trim().isNotEmpty,
+        mac is String && mac.trim().isNotEmpty && mac.length <= 128
+            ? mac.trim()
+            : null,
         info is Map && info.containsKey('sharedSecret'),
         recoverable,
         info is Map);
@@ -156,7 +160,8 @@ enum OfficialAccountStage {
   login('验证码登录'),
   devices('读取设备列表'),
   verification('官方验机'),
-  binding('同步账号绑定');
+  binding('同步账号绑定'),
+  unbinding('解绑账号设备');
 
   final String label;
   const OfficialAccountStage(this.label);
@@ -169,6 +174,19 @@ class YoooClawAccount {
   static const deviceService = 'https://openclaw-service.yoooclaw.com';
   final Dio _http;
   final OfficialAccountSessionStore _sessionStore;
+  final RecorderBindingBackupStore _backupStore;
+  bool _unbinding = false;
+  // true 为服务器已接受；false 为请求结果不确定。均不自动重发。
+  final Map<String, bool> _pendingUnbind = {};
+  final Set<String> _confirmedUnbound = {};
+  bool get hasPendingUnbind => _pendingUnbind.isNotEmpty;
+  String? get unbindNotice => _pendingUnbind.isNotEmpty
+      ? _pendingUnbind.values.any((accepted) => !accepted)
+          ? '解绑请求结果尚未确认，请重新读取设备列表；不会自动重发请求。'
+          : '服务器已接受解绑请求，尚未确认列表移除；请重新读取我的设备。'
+      : _confirmedUnbound.isNotEmpty
+          ? '已确认账号列表移除目标 SN。可添加新录音卡；若系统仍保留配对，请在 iPhone 设置中手动处理。旧密钥和恢复归档已保留，卡片侧状态仍需实际验证。'
+          : null;
   static Future<void> _sessionStorageQueue = Future.value();
   bool _sessionSaved = false;
   bool get isSessionSaved => _sessionSaved;
@@ -187,8 +205,12 @@ class YoooClawAccount {
   int missingSharedSecretDevices = 0;
   bool get isLoggedIn => !_closed && _token != null;
 
-  YoooClawAccount({Dio? http, OfficialAccountSessionStore? sessionStore})
-      : _sessionStore = sessionStore ?? SecureOfficialAccountSessionStore(),
+  YoooClawAccount(
+      {Dio? http,
+      OfficialAccountSessionStore? sessionStore,
+      RecorderBindingBackupStore? backupStore})
+      : _backupStore = backupStore ?? SecureRecorderBindingBackupStore(),
+        _sessionStore = sessionStore ?? SecureOfficialAccountSessionStore(),
         _http = http ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 15),
@@ -250,6 +272,8 @@ class YoooClawAccount {
   Future<void> logout() async {
     if (_closed) throw const OfficialAccountException('账号页面已关闭');
     final revision = ++_revision;
+    _pendingUnbind.clear();
+    _confirmedUnbound.clear();
     _clearBindings();
     try {
       await _withSessionStore(() => _sessionStore.delete());
@@ -266,6 +290,8 @@ class YoooClawAccount {
   Future<void> _invalidateSession(String token, int revision) async {
     if (_closed || _token != token || _revision != revision) return;
     _revision++;
+    _pendingUnbind.clear();
+    _confirmedUnbound.clear();
     _token = null;
     _userId = null;
     _sessionSaved = false;
@@ -390,6 +416,9 @@ class YoooClawAccount {
     final code = '${result['code']}';
     if (code == '200' || code == '000000' || (sms && code == '0')) return;
     final safeCode = _safeCode(code) ?? '未知';
+    if (stage == OfficialAccountStage.unbinding) {
+      throw OfficialAccountException('服务器未接受账号解绑（业务码 $safeCode）；未清除本机密钥，请重新读取设备核对');
+    }
     throw OfficialAccountException(
         '${stage.label}未通过（业务码 $safeCode）；请检查验证码或账号权限');
   }
@@ -414,6 +443,8 @@ class YoooClawAccount {
     _token = null;
     _sessionSaved = false;
     final loginRevision = ++_revision;
+    _pendingUnbind.clear();
+    _confirmedUnbound.clear();
     _userId = null;
     _clearBindings();
     final result = await _post(
@@ -462,6 +493,9 @@ class YoooClawAccount {
   }
 
   Future<List<OwnedRecorderBinding>> loadBindings() async {
+    if (_unbinding) {
+      throw const OfficialAccountException('解绑操作进行中，请等待后重新读取');
+    }
     final result = await _post(
         deviceService, '/api/device/toc/homePage/pub/index',
         stage: OfficialAccountStage.devices, authenticated: true);
@@ -509,9 +543,94 @@ class YoooClawAccount {
         .toList();
     _listedSerials = counts.keys.toSet();
     _hasDeviceSnapshot = true;
+    _confirmedUnbound.removeWhere(_listedSerials.contains);
+    for (final serial in _pendingUnbind.keys.toList()) {
+      if (!_listedSerials.contains(serial)) {
+        _confirmedUnbound.add(serial);
+        _pendingUnbind.remove(serial);
+      } else if (_pendingUnbind[serial] == false) {
+        // 不确定请求经正常列表对照后仍有记录，允许再次手动确认。
+        _pendingUnbind.remove(serial);
+      }
+    }
     _appendDiagnostic('设备资料：记录 $totalDevices；可恢复 ${_bindings.length}；'
         'sharedSecret 字段缺失 $missingSharedSecretDevices');
     return List.unmodifiable(_bindings);
+  }
+
+  bool canUnbindDevice(AccountRecorderDevice selected) =>
+      isLoggedIn &&
+      !_unbinding &&
+      _hasDeviceSnapshot &&
+      _devices.any((device) => identical(device, selected)) &&
+      !_pendingUnbind.containsKey(selected.serialNumber) &&
+      selected.hasMac &&
+      selected.hasRecoverableKey;
+
+  /// 仅账号解绑；不调用 HAL、不清卡、不删除活动密钥或系统配对。
+  Future<void> unbindDevice(AccountRecorderDevice selected,
+      {required bool Function() canProceed}) async {
+    if (!canUnbindDevice(selected) || !canProceed()) {
+      throw const OfficialAccountException('请重新读取并选择资料完整的设备，且先结束录音和蓝牙连接');
+    }
+    _unbinding = true;
+    final revision = ++_revision; // 立即使既有验机/绑定会话失效。
+    final serial = selected.serialNumber;
+    void ensureCurrent() {
+      if (!isLoggedIn ||
+          revision != _revision ||
+          !_devices.any((device) => identical(device, selected)) ||
+          !canProceed()) {
+        throw const OfficialAccountException('账号、设备资料或蓝牙状态已变化，请重新读取列表核对解绑结果');
+      }
+    }
+
+    try {
+      final candidates =
+          _bindings.where((b) => b.serialNumber == serial).toList();
+      if (candidates.length != 1 || candidates.single._secret == null) {
+        throw const OfficialAccountException('缺少唯一可恢复资料，未发送解绑请求');
+      }
+      final binding = candidates.single;
+      final archive = jsonEncode({
+        'version': 1,
+        'userId': _userId,
+        'serialNumber': serial,
+        'deviceName': selected.deviceName,
+        'protocol': binding.protocol.name,
+        'mac': selected._mac,
+        if (selected.uuid != null) 'uuid': selected.uuid,
+        'sharedSecret': base64Encode(binding._secret!),
+        'savedAt': DateTime.now().toUtc().toIso8601String(),
+        'purpose': 'pre-account-unbind-unverified-recovery',
+      });
+      try {
+        await _backupStore.saveVerified(archive);
+      } catch (_) {
+        throw const OfficialAccountException('恢复资料安全备份或读回校验失败，未发送解绑请求');
+      }
+      ensureCurrent();
+      _appendDiagnostic('解绑前恢复资料已独立安全归档并读回确认；活动密钥保留');
+      _pendingUnbind[serial] = false;
+      final result = await _post(
+          deviceService, '/api/device/toc/externalDeviceBind/unbind',
+          stage: OfficialAccountStage.unbinding,
+          authenticated: true,
+          data: {'deviceId': serial, 'mac': selected._mac});
+      ensureCurrent();
+      try {
+        _requireSuccess(result, stage: OfficialAccountStage.unbinding);
+      } on OfficialAccountException {
+        _pendingUnbind.remove(serial);
+        rethrow;
+      }
+      _pendingUnbind[serial] = true;
+      _revision++;
+      _clearBindings();
+      _appendDiagnostic('服务器已接受账号解绑；须重新读取列表确认移除，未清卡或系统配对');
+    } finally {
+      _unbinding = false;
+    }
   }
 
   String _recordShape(int index, Map<String, dynamic> record) {
@@ -548,6 +667,9 @@ class YoooClawAccount {
     final revision = _revision;
     void ensureCurrent(String sn) {
       if (!isLoggedIn ||
+          _unbinding ||
+          !_hasDeviceSnapshot ||
+          _pendingUnbind.containsKey(serial) ||
           revision != _revision ||
           sn != serial ||
           !_devices.any((device) => device.serialNumber == serial)) {
@@ -565,6 +687,8 @@ class YoooClawAccount {
     final revision = _revision;
     void ensureCurrent(String sn) {
       if (!isLoggedIn ||
+          _unbinding ||
+          _pendingUnbind.containsKey(serial) ||
           revision != _revision ||
           !_hasDeviceSnapshot ||
           sn != serial) {
