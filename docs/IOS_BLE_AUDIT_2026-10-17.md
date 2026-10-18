@@ -264,6 +264,8 @@ Manifest 为非 debuggable、allowBackup=false；唯一 network-security-config 
 
 针对用户要求继续拆解首次连接，再沿 BleDeviceEventHandler 的 PairingCompleted 分支和云绑定成功回调核对：设备公钥经过长度检查后生成 Base64 共享密钥，本机先保存，再以 ExternalDeviceBindRequest(deviceName, deviceId, ExtInfo(mac, sharedSecret, uuid)) 调用 /externalDeviceBind/bind。/bind 成功回调将当前代次的 InitialBindToken.cloudSucceeded 置真，调用 tryCompleteInitialBindReady；系统 bond 或其它就绪条件未满足时，仍不报告业务成功。REA 证据为 `ev_1a81a20335d923640e6355ae13c6d5fc2a8108fc90202b905cb2ee6349078c4c`，静态分析副本及结果保存在忽略目录 tools/ble_audit。MCP 的 JADX 环境未配置，复用了现有 CLI 和本地 Java/JADX，不更改客户端配置。
 
+另对平板实际安装的 2.2.2 重建副本调用 REA inspect_android_method，BleDeviceEventHandler.handle 中同样存在 /check 请求、generateSharedSecret 和 new ExtInfo(mac, sharedSecret, uuid) → /bind 分支。证据 `ev_1c8077e16e82dec6baab27073157a1475ffa1e80a74ff346d5149b5f2d82af9b`，原始输出位于 tools/ble_audit/android-live-2.2.2/rea-first-connect-handler.json。其静态分支存在不代表用户本次正常连接一定走到云绑定成功，仍待实体结果。
+
 不能据静态代码推断这张卡的官方 iOS 客户端已经上传共享密钥；实际列表明确未返回它。优先让用户已登录的 Android 官方 App 正常执行其连接流程，再检查是否产生可恢复材料。用户正常流程仍可能被拒绝，不能提前宣称该路径必然成功。SunMate 本轮只修改已被服务接受的账号渠道、缺失密钥的脱敏诊断与重复 SN 拒绝逻辑，未自行调用 /check、/bind、/unbind，也未改变现有 HAL、业务鉴权状态机或私有端点。
 
 ### 2026-10-18：修复本机表单 403

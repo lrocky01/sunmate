@@ -54,5 +54,7 @@
 - [已完成] 用户两次自行验证 App 同源渠道 3：登录、profile、设备列表均 HTTP 200 / 000000，唯一匹配目标 SN。补充字段分类后确认 extInfo 对象缺少 sharedSecret 字段；没有导出凭据或密钥。不能再把设备列表 401 解释为必须 SDK 授权，也不能宣称密钥已恢复。
 - [已完成] 核对官方首次连接中的真实 /check → verifyResult → X25519 → 本机保存 → /bind 云同步 → 系统 bond/通道就绪分支，补充 REA 云成功回调证据。Android 静态顺序不等同于官方 iOS 弹窗时序。
 - [已完成] 1.0.15+16 改用本次已验证的 App 账号登录/短信契约，增加字段缺失诊断并拒绝任何重复 SN；同步首页/诊断版本。55 项测试通过，分析无错误/警告（11 项已有弃用提示）；本机工具 7 项离线测试通过。未新增未经验证的首次绑定调用。
-- [进行中] 提交并推送 main 触发 1.0.15+16 iOS 构建，随后核对下载的 IPA。
+- [已完成] 3cfb4a5 已推送 main；Actions #31（39088682721）分析、测试、原生编译和 IPA 上传全部成功。下载并核对 1.0.15 / Build 16，Keychain 插件注册和 flutter_blue_plus_darwin 框架内 ANCS 选项/回调均存在；Runner 仍为无签名测试包。
+- 交付记录：build_output/SunMate-1.0.15+16.ipa，8,508,695 字节，SHA-256 3916fe1722d2957b9bc796ff90dc9f696f4aae048b9e6c282e450b45f31c9865。账号接口修复包已交付，未宣称已有共享密钥或已稳定录音。
+- [已完成] 对平板实际 2.2.2 分析副本的 BleDeviceEventHandler.handle 补做 REA 检查，确认同样包含 /check、generateSharedSecret 与 ExtInfo(mac, sharedSecret, uuid) 云绑定分支；证据 ev_1c8077e16e82dec6baab27073157a1475ffa1e80a74ff346d5149b5f2d82af9b。等待 Android 正常连接的实机结果，不以静态代码替代同步成功。
 - [待用户操作] 已请求用已登录的 Android 官方 App 正常连接卡片，观察首次流程能否上传共享密钥；不主动解绑或重置。实体稳定连接和录音仍待后续验证。

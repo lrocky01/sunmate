@@ -37,3 +37,11 @@ sequenceDiagram
 ```
 
 这是 APK 中可见的 Android 分支。iOS 原生系统配对/ANCS 属于另一层，Android createBond 不能直接移植到 CoreBluetooth。尚未取得官方 iOS 安装包或完整蓝牙空口记录，不能把 Android 静态顺序当作 iOS 弹窗时序的直接观测。
+
+## 构建与交付核对
+
+- 源码提交 3cfb4a5，main 的 Actions #31（39088682721）全部成功。
+- 本地安装包：build_output/SunMate-1.0.15+16.ipa，8,508,695 字节。
+- SHA-256：3916fe1722d2957b9bc796ff90dc9f696f4aae048b9e6c282e450b45f31c9865。
+- Info.plist 为 1.0.15 / Build 16；Runner 中 Keychain 插件注册存在，flutter_blue_plus_darwin 框架中 RequiresANCS、ANCS 授权回调和诊断字段存在。
+- 包仍需按原方式自签名安装；上述构建核验不能代替实体 BLE 鉴权和录音结果。
