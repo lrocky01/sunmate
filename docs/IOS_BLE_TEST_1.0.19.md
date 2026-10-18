@@ -24,3 +24,11 @@
 ## 验证
 
 全量80项测试通过；包含真实X25519/AES算法与模拟对端、设备拒绝不重试/不写密钥、拒绝摘要脱敏、响应字段数量/类型与额外字段不泄漏。所有账号请求在测试内存桩终止，无真实短信或厂商写入。静态分析无错误/警告，11条原有弃用info。git diff检查通过。
+
+## 构建交付
+
+- 源码88ab85cb56da7a6dea87a9739bca55dc4aa24691已推main。
+- [Actions #35](https://github.com/lrocky01/sunmate/actions/runs/39110906210)全部成功，artifact 12130012615。
+- build_output/SunMate-1.0.19+20.ipa：8,593,199字节。
+- SHA-256：09740b6f07cab41cd0255ac7a2be81cb6a27b4f83a550e9fdd188634cab2dcb2。
+- 已核对1.0.19 / Build20、ANCS API、原生状态字段、Keychain插件；Runner未签名，沿用原自签名安装方式。
