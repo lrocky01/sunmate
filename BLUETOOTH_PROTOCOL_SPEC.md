@@ -50,9 +50,11 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 厂商 `verifyRequest` 路径将 encrypted/mac/sn 提交至官方 `/api/device/toc/externalDeviceBind/check`，使用返回的 hmac 构造 verifyResult，并交换 32 字节原始 X25519 公钥。共享密钥直接取 X25519 结果，无已观察到的 HKDF。`verifyIdentityRequest.params.random` 先 Base64 解码，用共享密钥做 AES-256-CBC、16 字节全零 IV、PKCS7 填充，再将密文 Base64 放入 verifyIdentity.params.encrypted；Telink 不附 timestamp。
 
-官方账号的设备列表存在 extInfo.sharedSecret 恢复代码路径。官网渠道 6 的真实登录成功后访问设备列表仍为 401；2026-10-18 用户通过 App 同源渠道 3 正常验证码登录，profile 与设备列表均已返回 200 / 000000。1.0.15+16 据此切换到已验证的 App 登录/短信契约。当前唯一匹配目标 SN 的记录 extInfo 为对象，但没有 sharedSecret 字段，不能声称已恢复旧密钥；下一步验证 Android 官方 App 的正常首次连接能否完成其密钥上传。恢复材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并重新连接，由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
+官方账号的设备列表存在 extInfo.sharedSecret 恢复代码路径。官网渠道 6 的真实登录成功后访问设备列表仍为 401；2026-10-18 用户通过 App 同源渠道 3 正常验证码登录，profile 与设备列表均已返回 200 / 000000。1.0.15+16 据此切换到已验证的 App 登录/短信契约。当时唯一匹配目标 SN 的记录 extInfo 为对象，但没有 sharedSecret 字段。用户随后通过 Android 官方 App 正常连卡并收到按键响应；还没有新的账号查询证明密钥已上传，不能复用旧查询声称已恢复。恢复材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
 
-1.0.13+14 用户已确认验证码登录成功、设备列表请求被拒；该版移除 Bearer 后直接发送裸 Token 的实现存在格式缺口。设备接口公开的未认证响应声明 `WWW-Authenticate: Bearer`，1.0.14+15 因此按 `Authorization: Bearer <登录所得 Token>` 发送且只保留一个前缀。APK 的 `Raw` 表示保留已有格式，不等于要求裸 JWT。新的请求诊断区分步骤、HTTP 401/403 和数字业务码，不再把所有拒绝归为“没有权限”；实体账号权限及恢复仍待验证。
+1.0.16+17 改为先登录、选择自有账号设备，再扫描连接；收到实际首次挑战后才调用 /check。pairingResult 成功后安全保存 X25519 结果，并调用 /api/device/toc/externalDeviceBind/bind，正文为 deviceId=SN、deviceName、extInfo(mac, sharedSecret, 可选的账号既有 uuid)。官方代码先保存本机再同步账号；本版在同步成功后仅自动重连一次，验证新的 AES 身份挑战后才就绪。/check、/bind 本账号真实服务接受结果仍待手机验证。若已有合法旧密钥且设备请求重连身份验证，则不执行新协商。
+
+1.0.13+14 用户已确认验证码登录成功、设备列表请求被拒；该版移除 Bearer 后直接发送裸 Token 的实现存在格式缺口。设备接口公开的未认证响应声明 `WWW-Authenticate: Bearer`，1.0.14+15 因此按 `Authorization: Bearer <登录所得 Token>` 发送且只保留一个前缀。APK 的 `Raw` 表示保留已有格式，不等于要求裸 JWT。请求诊断区分步骤、HTTP 401/403 和数字业务码，不再把所有拒绝归为“没有权限”；仅加 Bearer 未解决官网渠道问题，App 同源登录已由后续真实结果验证。
 
 `bindResult`/`pairingResult` 不是完整业务验证成功；`success:false` 必须失败。仅在本次挑战应答之后收到 `verifyIdentityResult` 且 `params.success` 为布尔 true，并完成事件和音频通道初始化，才记录业务验证成功。写队列完成、物理连接仍在、灯亮、ANCS 允许都不是替代条件。
 
@@ -64,4 +66,4 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HCI 证据，不把数秒断开定性为 MCU 鉴权看门狗、固件 JSON 崩溃或对端主动断开。
 
-最新账号恢复验收步骤见 [1.0.14 手机测试说明](docs/IOS_BLE_TEST_1.0.14.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
+最新登录优先、真实验机与系统连接等待的验收步骤见 [1.0.16 手机测试说明](docs/IOS_BLE_TEST_1.0.16.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
