@@ -37,3 +37,11 @@
 5. 连接成功后保持一分钟，再长按说话并松开，检查按键、音频及私有端点转写。失败请复制完整蓝牙诊断，不发送手机号、验证码、Token或密钥。
 
 若卡拒绝bindRequest，保留bindError/失败日志，停止本次尝试；不因测试失败清除绑定。新协商若被接受会更新业务密钥并同步同一账号，官方App旧本地密钥后续能否正常同步仍需实测。此包交付不等于已经完成真机稳定录音验收。
+
+## 构建交付
+
+- 源码：1cb34ee9b6c8af2912ee845104e7a8919d631eb4，已推送main。
+- [Actions #34](https://github.com/lrocky01/sunmate/actions/runs/39108240089) 全部成功；artifact 12129691111。
+- 安装包：build_output/SunMate-1.0.18+19.ipa，8,584,592字节。
+- SHA-256：79fb44c10ddcc16b40523bda67371d11737eb8840d875949b6fe4f8d04d23544。
+- 已核对Info.plist=1.0.18 / Build19、ANCS API、原生状态字段及Keychain插件；Runner未签名，沿用之前的自签名安装方式。
