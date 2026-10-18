@@ -72,15 +72,17 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
       _status = bindings.isNotEmpty
           ? '已读取 ${bindings.length} 台具备恢复材料的设备，请核对当前卡的 SN'
           : _account.totalDevices == 0
-              ? '该会话下没有设备记录；尚不能确认官网账号与 App 设备记录互通'
-              : '账号有设备记录，但没有唯一且格式完整的可恢复密钥；未猜测或替换';
+              ? '当前官方账号没有返回设备记录，请核对登录账号'
+              : _account.missingSharedSecretDevices > 0
+                  ? '账号设备资料中缺少共享密钥。请先让官方 App 联网连接并完成同步，再点「重新读取我的设备」'
+                  : '账号有设备记录，但没有唯一且格式完整的可恢复密钥；未猜测或替换';
     });
   }
 
   Future<void> _login() => _run(() async {
         try {
           await _account.login(_phone.text.trim(), _code.text.trim());
-          if (mounted) setState(() => _status = '官网登录成功，正在读取设备绑定');
+          if (mounted) setState(() => _status = '官方账号登录成功，正在读取设备绑定');
           await _loadBindings();
         } finally {
           if (mounted) _code.clear();
@@ -135,7 +137,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                   icon: const Icon(Icons.close)),
             ]),
             const Text(
-                '使用你自己的 YoooClaw 官网手机号验证码登录，只读取设备绑定资料。验证码和登录会话只在本页内存中使用，关闭后清除。'),
+                '使用你自己的 YoooClaw App 账号验证码登录，读取已有设备绑定资料。验证码和登录会话只在本页内存中使用，关闭后清除。'),
             const SizedBox(height: 8),
             const Text(
                 '先在首页连接一次目标录音卡，取得设备上报的 SN。恢复时必须与账号记录的 SN 和协议同时匹配。录音、MOSS-ASR 和 Hermes 仍走你的私有端点。'),

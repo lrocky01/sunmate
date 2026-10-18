@@ -223,3 +223,51 @@ QR 解析器接受带 sn/sign 和可选 confirm_code 的激活地址，重新绑
 上述证据支持修复一个具体缺口：设备列表请求改为 `Authorization: Bearer <实际登录 Token>`，输入已带前缀时只保留一次。继续使用 channel=6 的正常官网账号，不猜 Android 受保护的登录体、不冒用官方 app_id、不自动降级或重试其它权限。公开的账号登录成功不保证绑定接口授权成功，尚须手机核对。
 
 新版错误与复制诊断保留请求阶段、HTTP 状态和白名单数字业务码；仅记录服务端认证 scheme 是否 Bearer，不记录 realm、Token、验证码、手机号、共享密钥或服务端正文。401 的说明改为“凭证未被接受”，403 改为“服务器拒绝访问，具体原因未确认”。仍不得把单个状态码解释为必须申请 SDK。测试及交付状态见 docs/todo.md，手机步骤见 [1.0.14 测试说明](IOS_BLE_TEST_1.0.14.md)。
+
+## 续查：1.0.14+15 真实账号仍返回 401
+
+用户反馈：短信和验证码登录均 HTTP 200、业务码 000000；设备列表连续两次 HTTP 401，响应声明 Bearer；设备已上报格式正确的 SN。补前缀没有完成实际接入，不能把上版改动称为这次 401 的完整根因或声称设备已鉴权。签发方、有效期、签名、渠道或其它网关规则仍未区分。
+
+补查官网 `/billing/purchases` 公开页面及脚本：orderClient 仍以 www 同源 `/api` 为基址。所见源码没有证明官网 JWT 可直接用于 App 的设备域名，也没有证实公开会话兑换路径。原始页面和额外脚本在忽略目录 `tools/ble_audit/web-account-followup/`。
+
+APK 明确的 App 登录路径为 `/api/account/auth/login/open/loginOrRegister`，短信路径为 `/api/account/auth/open/sendLoginSms`。LoginViewModel.sendLoginSms 使用 phone/channel/deviceId，channel 来自 DistributionConfig 的字符串 3，deviceId 为官方代码字面量；相邻验证码验证接口使用 phone/smsCode。实际短信登录调用仍受保护，不能据相邻接口拼出字段后声称完整还原。
+
+对生产域名的上述登录路径只发送一次空 JSON，不含手机号、验证码或 Token：HTTP 200、业务码 400、提示“短信验证码不能为空”、data 为空；没有发送短信或取得会话。脱敏结果在 `tools/ble_audit/account-empty-login-validation.json`。这仅证明验证码校验入口可达。
+
+用户确认有 Android 手机。已从 Google 官方准备 platform-tools 37.0.1，位于忽略目录 `tools/android-platform-tools/`，下载包 SHA-256 为 `ee39ad5967e95c2a07f04dbcbde96b1a0c916ba376096db5d2f498b7727a5d1d`；没有修改全局 PATH。ADB 版本检查通过，当前尚无设备连接。下一步需要手机通过 USB 接入并由用户确认调试授权，才能核查安装版本和日志能力。
+
+需要避免新误区：CustomLoggingInterceptor.intercept 的发行版路径把请求/响应交给 Mars Xlog；XLogUtils.initMarLog 显式 setConsoleLogOpen(false)，因此 ADB 不保证能直接看到网络日志。源码存在 DebugSettingsActivity 的本地日志分享方法，但该发行版的可用入口尚未观察，不跳过权限门槛。后续只提取必要的路径、字段名和状态，不把整份账号日志、验证码、JWT 或共享密钥上传到聊天，不关闭 TLS 或账号校验。
+
+本轮未修改 App 或构建新包；最新仍为 1.0.14+15。HAL 和私有端点未改，实体稳定连接与录音仍未达成。
+
+REA 日志路由方法证据：`ev_f9176cdb88b89e1ca3d6cd1934027b2fc8e546bfde42b546d7f65b7d68b4bd28`，对象是重建分析副本上的 XLogUtils.initMarLog；静态观察不等同于手机运行时取证。
+
+## Android 接入与本机同源账号验证
+
+用户 USB 授权后，ADB 识别 Android 12 / SDK 31 设备，已装 `ai.yidao.yoooclaw` 2.2.2（2002002）。只读提取的 APK 为 75,479,165 字节，SHA-256 `d0544afdfee9ede59fbe669b24729a48b00d921c28e435fe07c40e997e7ff9fd`。没有升级、卸载或清空原 App。用户自行完成了正常官方登录，没有连接或重新绑定卡片。
+
+该包仍只有 30 个外壳类，依据其自身三段记录和 map_list 重建分析 DEX，4096 字节之后逐字节保留。副本、哈希、方法证据在 `tools/ble_audit/android-live-2.2.2/`。REA 的 LoginViewModel 类证据 `ev_257c73162212254d1d9e72ef8dec2906873921dd78cae3bded28e9fdbf76e5da` 仍未还原完整登录调用。该版本 XLogUtils.initMarLog 证据 `ev_c3a283ad0dd4d5ee18bf31eaaa23271bbc59d1b60048f814c474c9c8d65d1d30` 确认关闭控制台；实机指定 App PID 的 NetLog 采集为零字节，不能宣称捕获了真实登录事务。
+
+Manifest 为非 debuggable、allowBackup=false；唯一 network-security-config 未声明用户 CA 信任。设置页没有看到日志导出入口，App 已打开的积分 WebView 也没有对应调试 socket。未尝试绕过组件 exported 限制、root、修改证书校验、开启非公开权限或向厂商发送反馈日志。只读浏览设置和积分页面未发起购买。资源表被保护导致 JADX 部分资源名解析失败，已保留该限制，不能据此声称资源全部还原。
+
+为减少 iOS 反复装包，新增 [Mac 本机验证工具](ble-audit/official_account_probe.py)。用户在仅监听 127.0.0.1 的页面自行输入手机号和新短信验证码；短信入口/字段/渠道来自 APK，登录入口来自 AccountApiService。登录体的 phone/smsCode 来自相邻验证接口与官网，channel/deviceId 沿用已观察到的 App 短信字段，仍标为候选，未声称完整逆向得到。不会自动改渠道或轮换参数；失败即保留脱敏状态。
+
+登录若正常签发会话，只用该真实会话请求 profile 和已有设备列表；不调用绑定、解绑、验机或音频接口。公开报告只含 HTTP/数字业务码、白名单 JWT 元数据（未经验证的格式信息）、目标设备匹配数和共享密钥格式是否有效；不输出手机号、验证码、Token、用户 ID、SN 明文、响应正文或密钥值，不保存原始账号日志。UI 防跨来源与 nonce 校验，短信 60 秒间隔，禁止 HTTP 重定向携带会话。6 项离线测试与语法检查已通过；真实账号结果尚待用户操作，测试不代替实证。
+
+本轮仍未修改 Flutter 或构建新 IPA，HAL 与私有端点直连保持原样。
+
+## 2026-10-18：App 同源登录实测与首次连接流程
+
+用户在本机页面自行获取新验证码并完成两次正常登录。两次 App 渠道 3 的短信、登录、profile、设备列表均返回 HTTP 200 / 000000；账号有一条设备记录，唯一匹配实际卡片 SN。第二次增加字段分类后确认 extInfo 是对象，但不存在 sharedSecret 字段，而非 Base64 长度误判或 JSON 字符串解析失败。仅保留脱敏状态；没有保存或输出实际会话、账号正文或密钥。
+
+本次接受的登录体为 phone/smsCode/channel 字符串 3/deviceId 字面量 deviceId；登录入口与短信入口均为 App 域名的已确认路径。此实测足以将 SunMate 从官网渠道 6 切至已验证的 App 账号接口，不能把最初组合字段的过程描述为成功捕获了官方 App 登录请求。设备列表能访问也不代表 /check 或 /bind 已获同样验证。
+
+针对用户要求继续拆解首次连接，再沿 BleDeviceEventHandler 的 PairingCompleted 分支和云绑定成功回调核对：设备公钥经过长度检查后生成 Base64 共享密钥，本机先保存，再以 ExternalDeviceBindRequest(deviceName, deviceId, ExtInfo(mac, sharedSecret, uuid)) 调用 /externalDeviceBind/bind。/bind 成功回调将当前代次的 InitialBindToken.cloudSucceeded 置真，调用 tryCompleteInitialBindReady；系统 bond 或其它就绪条件未满足时，仍不报告业务成功。REA 证据为 `ev_1a81a20335d923640e6355ae13c6d5fc2a8108fc90202b905cb2ee6349078c4c`，静态分析副本及结果保存在忽略目录 tools/ble_audit。MCP 的 JADX 环境未配置，复用了现有 CLI 和本地 Java/JADX，不更改客户端配置。
+
+不能据静态代码推断这张卡的官方 iOS 客户端已经上传共享密钥；实际列表明确未返回它。优先让用户已登录的 Android 官方 App 正常执行其连接流程，再检查是否产生可恢复材料。用户正常流程仍可能被拒绝，不能提前宣称该路径必然成功。SunMate 本轮只修改已被服务接受的账号渠道、缺失密钥的脱敏诊断与重复 SN 拒绝逻辑，未自行调用 /check、/bind、/unbind，也未改变现有 HAL、业务鉴权状态机或私有端点。
+
+### 2026-10-18：修复本机表单 403
+
+用户提交本机页面时收到 Python HTTPServer 的 403，而 /status 仍为 awaiting_user。检查发现页面的 Referrer-Policy=no-referrer 与严格 Origin 校验冲突：[Fetch 标准的 Origin 处理](https://fetch.spec.whatwg.org/#append-a-request-origin-header)要求普通非 CORS 表单在该策略下使用空来源。修正为 same-origin，只保留本机同源来源信息，跨来源仍不发送 Referer；服务端继续拒绝 Origin:null、缺失来源、跨站来源及错误 nonce，没有放宽安全校验。增加固定脱敏拒绝原因，便于区分页面错误与厂商接口拒绝。
+
+使用两个独立本机 HTTPServer 和隔离 Chromium 上下文，对同一原生表单进行对照：旧策略提交 HTTP 403、reason=origin_null；新策略提交 HTTP 200、来源为测试页面自身。厂商请求完全替换为本地桩，没有发送短信或真实账号请求。扩展后的 6 项离线测试通过，覆盖 null/缺失来源拒绝及正常同源提交。修正版已在原端口重启，真实账号结果仍待用户在新首页自行验证；此修复不代表设备接口或硬件鉴权已解决。

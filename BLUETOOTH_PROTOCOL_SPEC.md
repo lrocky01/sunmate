@@ -50,7 +50,7 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 厂商 `verifyRequest` 路径将 encrypted/mac/sn 提交至官方 `/api/device/toc/externalDeviceBind/check`，使用返回的 hmac 构造 verifyResult，并交换 32 字节原始 X25519 公钥。共享密钥直接取 X25519 结果，无已观察到的 HKDF。`verifyIdentityRequest.params.random` 先 Base64 解码，用共享密钥做 AES-256-CBC、16 字节全零 IV、PKCS7 填充，再将密文 Base64 放入 verifyIdentity.params.encrypted；Telink 不附 timestamp。
 
-官方账号的设备列表存在 extInfo.sharedSecret 恢复路径。1.0.13+14 已接入官网正常手机号与 4 位短信验证码登录（channel=6），随后用该会话读取账号设备列表；官网会话能否访问 Android App 的既有绑定，仍待用户手机实测。材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并重新连接，由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
+官方账号的设备列表存在 extInfo.sharedSecret 恢复代码路径。官网渠道 6 的真实登录成功后访问设备列表仍为 401；2026-10-18 用户通过 App 同源渠道 3 正常验证码登录，profile 与设备列表均已返回 200 / 000000。1.0.15+16 据此切换到已验证的 App 登录/短信契约。当前唯一匹配目标 SN 的记录 extInfo 为对象，但没有 sharedSecret 字段，不能声称已恢复旧密钥；下一步验证 Android 官方 App 的正常首次连接能否完成其密钥上传。恢复材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并重新连接，由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
 
 1.0.13+14 用户已确认验证码登录成功、设备列表请求被拒；该版移除 Bearer 后直接发送裸 Token 的实现存在格式缺口。设备接口公开的未认证响应声明 `WWW-Authenticate: Bearer`，1.0.14+15 因此按 `Authorization: Bearer <登录所得 Token>` 发送且只保留一个前缀。APK 的 `Raw` 表示保留已有格式，不等于要求裸 JWT。新的请求诊断区分步骤、HTTP 401/403 和数字业务码，不再把所有拒绝归为“没有权限”；实体账号权限及恢复仍待验证。
 

@@ -46,8 +46,8 @@ void main() {
     adapter = AccountHttpAdapter();
     client = YoooClawAccount(http: Dio()..httpClientAdapter = adapter);
     adapter.respond = (r) {
-      if (r.path.endsWith('/send-sms')) return response({'code': '0'});
-      if (r.path.endsWith('/login'))
+      if (r.path.endsWith('/sendLoginSms')) return response({'code': '0'});
+      if (r.path.endsWith('/loginOrRegister'))
         return response({
           'code': '200',
           'data': {
@@ -64,24 +64,34 @@ void main() {
     };
   });
   tearDown(() => client.close());
-  test('normal website login and account recovery follow observed contracts',
+  test('validated App channel login and account recovery use one service',
       () async {
     await client.sendSms('13800000000');
     await client.login('13800000000', '1234');
     final bindings = await client.loadBindings();
     expect(adapter.requests.map((r) => r.uri.host), [
-      'www.yoooclaw.com',
-      'www.yoooclaw.com',
+      'openclaw-service.yoooclaw.com',
+      'openclaw-service.yoooclaw.com',
       'openclaw-service.yoooclaw.com'
     ]);
-    expect(adapter.requests[0].data, {'phone': '13800000000', 'channel': 6});
-    expect(adapter.requests[1].data,
-        {'phone': '13800000000', 'smsCode': '1234', 'channel': 6});
+    expect(adapter.requests[0].uri.path, '/api/account/auth/open/sendLoginSms');
+    expect(adapter.requests[0].data,
+        {'phone': '13800000000', 'channel': '3', 'deviceId': 'deviceId'});
+    expect(adapter.requests[1].uri.path,
+        '/api/account/auth/login/open/loginOrRegister');
+    expect(adapter.requests[1].data, {
+      'phone': '13800000000',
+      'smsCode': '1234',
+      'channel': '3',
+      'deviceId': 'deviceId'
+    });
     expect(adapter.requests[2].uri.path, '/api/device/toc/homePage/pub/index');
     expect(adapter.requests[2].headers['Authorization'],
         'Bearer test-only-session');
     expect(adapter.requests[2].headers['app_key'], 'yoooclaw');
     expect(adapter.requests[0].headers.containsKey('Authorization'), false);
+    expect(adapter.requests.every((r) => r.headers['app_key'] == 'yoooclaw'),
+        true);
     expect(adapter.requests.every((r) => !r.followRedirects), true);
     expect(bindings.single.matches('ab00000000000001', RecorderProtocol.telink),
         true);
@@ -100,9 +110,8 @@ void main() {
       expect(diagnostic, isNot(contains(sensitive)));
     }
   });
-  test('bare website JWT gains the required Bearer scheme exactly once',
-      () async {
-    adapter.respond = (r) => r.path.endsWith('/login')
+  test('bare App JWT gains the required Bearer scheme exactly once', () async {
+    adapter.respond = (r) => r.path.endsWith('/loginOrRegister')
         ? response({
             'code': '200',
             'data': {'jwtToken': 'test-only-bare-session', 'id': '123'}
@@ -235,6 +244,52 @@ void main() {
     binding.clear();
     expect(
         binding.matches(binding.serialNumber, RecorderProtocol.telink), false);
+  });
+  test(
+      'owned device without sharedSecret reports field absence without exposing data',
+      () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (r) => response({
+          'code': '000000',
+          'data': {
+            'deviceList': [
+              {
+                'externalDeviceId': 'AB00000000000001',
+                'deviceType': 'TELINK',
+                'extInfo': {
+                  'mac': 'private-mac-value',
+                  'uuid': 'private-uuid-value'
+                }
+              }
+            ]
+          }
+        });
+    expect(await client.loadBindings(), isEmpty);
+    expect(client.totalDevices, 1);
+    expect(client.missingSharedSecretDevices, 1);
+    final text = client.diagnostics.join('\n');
+    expect(text, contains('sharedSecret 字段缺失 1'));
+    expect(text, isNot(contains('private-mac-value')));
+    expect(text, isNot(contains('private-uuid-value')));
+  });
+  test('a duplicate SN with missing key still makes the other record ambiguous',
+      () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (r) => response({
+          'code': '000000',
+          'data': {
+            'deviceList': [
+              record(),
+              {
+                'externalDeviceId': 'AB00000000000001',
+                'deviceType': 'AI_NOTE_6095',
+                'extInfo': {}
+              }
+            ]
+          }
+        });
+    expect(await client.loadBindings(), isEmpty);
+    expect(client.totalDevices, 2);
   });
   test('late response after closing cannot restore the session', () async {
     final pending = Completer<ResponseBody>();

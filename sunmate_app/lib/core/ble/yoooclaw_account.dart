@@ -97,10 +97,10 @@ enum OfficialAccountStage {
   const OfficialAccountStage(this.label);
 }
 
-/// 登录协议来自官网公开客户端：channel=6，不猜测被加固的 Android 登录体。
+/// App 同源渠道 3 的短信、登录与设备列表已由用户正常验证码登录验证。
+/// 登录字段最初由静态线索组合，已被真实服务接受；不等同于捕获了 APK 请求。
 /// 会话只在本次页面内存中存在；持久保存的只有用户确认恢复的设备共享密钥。
 class YoooClawAccount {
-  static const website = 'https://www.yoooclaw.com';
   static const deviceService = 'https://openclaw-service.yoooclaw.com';
   final Dio _http;
   String? _token;
@@ -110,6 +110,7 @@ class YoooClawAccount {
   final List<String> _diagnostics = [];
   List<String> get diagnostics => List.unmodifiable(_diagnostics);
   int totalDevices = 0;
+  int missingSharedSecretDevices = 0;
   bool get isLoggedIn => !_closed && _token != null;
 
   YoooClawAccount({Dio? http})
@@ -123,9 +124,14 @@ class YoooClawAccount {
   void _record(OfficialAccountStage stage, int? status,
       {String? code, String? scheme}) {
     if (_closed) return;
-    _diagnostics.add('${stage.label}：HTTP ${status ?? "无响应"}'
+    _appendDiagnostic('${stage.label}：HTTP ${status ?? "无响应"}'
         '${code == null ? "" : "；业务码 $code"}'
         '${scheme == null ? "" : "；服务端认证方式 $scheme"}');
+  }
+
+  void _appendDiagnostic(String message) {
+    if (_closed) return;
+    _diagnostics.add(message);
     if (_diagnostics.length > 20) _diagnostics.removeAt(0);
   }
 
@@ -150,9 +156,9 @@ class YoooClawAccount {
             responseType: ResponseType.plain,
             headers: {
               'Content-Type': 'application/json',
+              // APK 中的公开产品标识，不是厂商密钥。
+              'app_key': 'yoooclaw',
               if (authenticated) ...{
-                // APK 中的公开产品标识，不是 API Key 或厂商签名密钥。
-                'app_key': 'yoooclaw',
                 // 接口的 WWW-Authenticate 要求 Bearer；Raw 只表示原样发送，
                 // 不能据此把官网会话中的认证前缀删掉后直接下发。
                 'Authorization': 'Bearer $_token',
@@ -224,9 +230,9 @@ class YoooClawAccount {
       throw const OfficialAccountException('请输入正确的手机号');
     }
     _requireSuccess(
-        await _post(website, '/api/auth/send-sms',
+        await _post(deviceService, '/api/account/auth/open/sendLoginSms',
             stage: OfficialAccountStage.sms,
-            data: {'phone': phone, 'channel': 6}),
+            data: {'phone': phone, 'channel': '3', 'deviceId': 'deviceId'}),
         stage: OfficialAccountStage.sms,
         sms: true);
   }
@@ -239,15 +245,21 @@ class YoooClawAccount {
     _token = null;
     _userId = null;
     _clearBindings();
-    final result = await _post(website, '/api/auth/login',
+    final result = await _post(
+        deviceService, '/api/account/auth/login/open/loginOrRegister',
         stage: OfficialAccountStage.login,
-        data: {'phone': phone, 'smsCode': smsCode, 'channel': 6});
+        data: {
+          'phone': phone,
+          'smsCode': smsCode,
+          'channel': '3',
+          'deviceId': 'deviceId'
+        });
     _requireSuccess(result, stage: OfficialAccountStage.login);
     final user = result['data'];
     final token = user is Map ? user['jwtToken'] : null;
     final id = user is Map ? user['id'] : null;
     if (token is! String || id == null) {
-      throw const OfficialAccountException('官网未返回可用于设备接口的账号会话');
+      throw const OfficialAccountException('官方 App 账号接口未返回有效会话');
     }
     final normalized = token
         .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
@@ -257,7 +269,7 @@ class YoooClawAccount {
         normalized.length > 8192 ||
         !RegExp(r'^[A-Za-z0-9._~+/-]+=*$').hasMatch(normalized) ||
         !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(userId)) {
-      throw const OfficialAccountException('官网返回的账号会话格式不兼容');
+      throw const OfficialAccountException('官方 App 账号接口返回的会话格式不兼容');
     }
     _token = normalized;
     _userId = userId;
@@ -275,23 +287,31 @@ class YoooClawAccount {
     }
     _clearBindings();
     totalDevices = records.length;
+    final counts = <String, int>{};
     for (final record in records) {
       if (record is Map<String, dynamic>) {
+        final serial = record['externalDeviceId'];
+        if (serial is String &&
+            RegExp(r'^[A-Za-z]{2}[0-9]{14}$').hasMatch(serial.trim())) {
+          final id = serial.trim().toUpperCase();
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
+        final info = record['extInfo'];
+        if (info is Map && !info.containsKey('sharedSecret')) {
+          missingSharedSecretDevices++;
+        }
         final binding = OwnedRecorderBinding.fromAccountRecord(record);
         if (binding != null) _bindings.add(binding);
       }
     }
-    // 同一 SN/协议出现多个候选时不随意选密钥。
-    final counts = <String, int>{};
-    for (final b in _bindings) {
-      final id = '${b.protocol.name}/${b.serialNumber}';
-      counts[id] = (counts[id] ?? 0) + 1;
-    }
+    // 同一 SN 有重复记录时不选取其中一条，即使另一条缺少密钥或协议不同。
     _bindings.removeWhere((b) {
-      final ambiguous = counts['${b.protocol.name}/${b.serialNumber}'] != 1;
+      final ambiguous = counts[b.serialNumber] != 1;
       if (ambiguous) b.clear();
       return ambiguous;
     });
+    _appendDiagnostic('设备资料：记录 $totalDevices；可恢复 ${_bindings.length}；'
+        'sharedSecret 字段缺失 $missingSharedSecretDevices');
     return List.unmodifiable(_bindings);
   }
 
@@ -299,6 +319,7 @@ class YoooClawAccount {
     for (final binding in _bindings) binding.clear();
     _bindings = [];
     totalDevices = 0;
+    missingSharedSecretDevices = 0;
   }
 
   void close() {
