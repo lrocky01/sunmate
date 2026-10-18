@@ -4,6 +4,8 @@
 
 用户确认 Android 官方 App 登录后能看见保存设备，系统配对后可保持一分钟且按键有响应。说明这张卡当前有可工作的官方 Android 路径；不能由此证明 iPhone 的系统配对状态正常，也不能证明每次账号设备接口都返回共享密钥。
 
+随后用户补充：**同一台 iPhone 的官方 App 也连不上**。因此本轮现象不只发生在 SunMate；当前排查优先级转为 iPhone 与卡片的系统连接/配对状态，不再把补登录字段当作已确定的解决办法。旧 bond、卡片切换主机后的状态等仍是候选原因，尚无 HCI 或明确设备错误予以证实。已请求只读查看 iPhone 蓝牙列表归属和状态，不要求忽略设备或解绑。
+
 SunMate 1.0.16+17 的明确日志为：11:20:09 发出 connect_requested，CBPeripheral=connecting；随后 90 秒没有 connected/GATT，App 截止后发 cancel_requested，系统返回 disconnected、error=nil。每 10 秒重复的 nativeTime 是读取最后事件快照，不是重复 connect。用户反馈「仅录音连接」仍失败，但尚未提供显示 RequiresANCS=false 的该次完整日志，不能当作已观测到的精确状态。
 
 **当前先卡在 iOS 系统连接。账号信息缺少共享密钥可能阻塞后续业务验证，但目前没有证据表明它造成这次 GATT 前的 pending。**
@@ -73,3 +75,5 @@ SunMate 1.0.16+17 的明确日志为：11:20:09 发出 connect_requested，CBPer
 ## 下一步对照
 
 关闭 Android 蓝牙后，先测试同一台 iPhone 的官方 App 能否保持一分钟并响应按键；若提示解绑/重置则停止。若官方也失败，先调查 iPhone/卡片系统连接；若官方成功，再退出官方 App，用 SunMate 对照新原生快照。保留 RequiresANCS=false 的完整失败日志。只有进入 GATT 后，才用新的账号资料状态和实际 /check /bind /AES 回执判断业务材料是否缺失。
+
+本次官方 iPhone 对照已反馈失败，接着查看「设置→蓝牙」的目标卡是否在我的设备/其它设备、是否已连接。可先按原厂正常方法关机再开机、确认 App 蓝牙权限；Apple 的常规排查也先列出这些步骤。[Apple 支持](https://support.apple.com/zh-cn/111804)。不根据猜测要求恢复出厂或清除 Android 的现有成功绑定。
