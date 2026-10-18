@@ -23,6 +23,12 @@ REA 核对官方2.2.2/2.3.0 的 Telink 广播解码，确认它从广播取得 S
 
 上述是代码和模拟对端验证。真实卡片是否接受恢复密钥、能否长时间稳定录音，仍需本次iPhone测试，不提前宣布完成。
 
+## 安装包
+
+源码提交3ff7c42705a8ee6d6e9be493895d89a9b737cae2已推main。[Actions #36](https://github.com/lrocky01/sunmate/actions/runs/39118373082)的检查、iOS原生编译、打包和上传步骤均成功，artifact为12133078460。安装包已下载并核对Info.plist的1.0.20 / Build21、Keychain插件、ANCS原生符号及本版恢复逻辑字符串；artifact摘要一致。
+
+本地文件：build_output/SunMate-1.0.20+21.ipa，8,600,919字节，SHA-256：11df08371f5ab26eb85522451476175de21a44e81f28b15e727edb3c77f53535。Runner沿用现有无签名构建，需要按此前方式自签安装。
+
 ## 手机操作
 
 1. 保留当前新账号绑定，不再解绑卡片。关闭Android蓝牙，然后开启iPhone蓝牙。
