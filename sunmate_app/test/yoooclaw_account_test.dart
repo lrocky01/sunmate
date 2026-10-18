@@ -150,6 +150,50 @@ void main() {
     expect(adapter.requests.last.data, isNull);
     expect(adapter.requests.length, 2);
   });
+  test(
+      'response field inventory records counts and types, never unknown content',
+      () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (_) => response({
+          'code': '000000',
+          'private-envelope-key': 'private-envelope-value',
+          'data': {
+            'deviceList': [
+              {
+                ...record(),
+                'private-record-key': 'private-record-value',
+                'extInfo': {
+                  'mac': 'private-mac-value',
+                  'uuid': null,
+                  'private-ext-key': 'private-ext-value'
+                }
+              },
+              {
+                ...record(sn: 'AB00000000000002'),
+                'extInfo': {'sharedSecret': ''}
+              },
+              {
+                ...record(sn: 'AB00000000000003'),
+                'extInfo': {'sharedSecret': null}
+              },
+            ],
+            'private-data-key': 'private-data-value'
+          }
+        });
+    await client.loadBindings();
+    final text = client.diagnostics.join('\n');
+    expect(text, contains('顶层 3 字段；data 2 字段；设备记录 3 条'));
+    expect(text, contains('设备记录 #1：5 字段（额外 1）'));
+    expect(text, contains('扩展 3 字段（额外 1）'));
+    expect(text, contains('sharedSecret=缺失'));
+    expect(text, contains('sharedSecret=空字符串'));
+    expect(text, contains('sharedSecret=null'));
+    expect(text, contains('uuid=null'));
+    expect(text, isNot(contains('private-')));
+    expect(text, isNot(contains(base64Encode(shared))));
+    expect(text, isNot(contains('AB00000000000001')));
+    expect(adapter.requests.length, 2);
+  });
   test('invalid input and queries without login never leave the device',
       () async {
     await expectLater(client.sendSms('not-a-phone'),

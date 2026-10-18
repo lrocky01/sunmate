@@ -223,7 +223,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
     if (method == 'bindRequest' && rejectBindRequest) {
       event(request.remoteId, {
         'method': 'bindError',
-        'params': {'success': false}
+        'params': {'error': 'already_bound'}
       });
     } else if (connectCount == 1 &&
         (requiresBindRequest
@@ -325,7 +325,8 @@ void main() {
     platform.reset();
     device = BluetoothDevice.fromId(
         '00000000-0000-0000-0000-${(++sequence).toString().padLeft(12, "0")}');
-    driver = AiNote6095Driver(authenticationTimeout: const Duration(seconds: 2));
+    driver =
+        AiNote6095Driver(authenticationTimeout: const Duration(seconds: 2));
   });
   tearDown(() async {
     await driver.dispose();
@@ -715,6 +716,8 @@ void main() {
     expect(keys.writes, 0);
     expect(platform.connectCount, 1);
     expect(driver.lastErrorMessage, contains('bindError'));
+    expect(driver.diagnosticText, contains('error=already_bound'));
+    expect(driver.diagnosticText, contains('最近错误: 设备报告 bindError 失败'));
   });
 
   test(

@@ -69,3 +69,5 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HCI 证据，不把数秒断开定性为 MCU 鉴权看门狗、固件 JSON 崩溃或对端主动断开。
 
 最新无密钥分支的依据及验收步骤见 [1.0.18 手机测试说明](docs/IOS_BLE_TEST_1.0.18.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
+
+2026-10-18 1.0.18+19实体反馈：链路/GATT成功，正常bindRequest后设备返回bindError，尚未进入verifyRequest或/check。官方bindError详情依次取error/reason/message/status；1.0.19+20补安全摘要，不从87字节包长猜原因，不自动执行解绑。账号服务器字段与页面来源的完整边界见 [数据映射](docs/IOS_BLE_ACCOUNT_DATA_MAP_2026-10-18.md)。

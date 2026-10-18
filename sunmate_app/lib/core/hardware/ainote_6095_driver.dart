@@ -149,13 +149,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.18+19',
+        'SunMate 1.0.19+20',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备上报 SN: $_serialNumber',
         '协议: ${_profile?.protocol.name ?? "未识别"}',
         '链路: $isLinkConnected; 业务就绪: $_isConnected; 通知授权属性: ${_ancsAuthorized ?? "未知"}',
         '原生状态: ${connectionDetails.nativeStateLabel}; 系统已连接服务匹配: ${_systemConnectedMatch ?? "未查询"}; 广播可连接: ${_advertisementConnectable ?? "未知"}',
+        '最近错误: ${lastErrorMessage ?? "无"}',
         ..._connectionLogs,
       ].join('\n');
 
@@ -725,7 +726,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _identityVerified = false;
       _authentication?.cancel();
       _cancelVoice();
-      lastErrorMessage = '设备报告 $safeMethod 失败；请保留日志，不自动清除绑定';
+      final details = RecorderFailureSummary.describe(params);
+      lastErrorMessage = '设备报告 $safeMethod 失败；拒绝详情（安全摘要）：$details；不自动清除绑定';
       _phase = '业务验证失败';
       _log(lastErrorMessage!);
       _finishWaiting(false);

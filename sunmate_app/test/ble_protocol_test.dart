@@ -5,6 +5,42 @@ import 'package:sunmate_app/core/ble/ble_json_rpc.dart';
 import 'package:sunmate_app/core/ble/ble_protocol.dart';
 
 void main() {
+  test('failure details retain descriptive fields without inventing a cause',
+      () {
+    expect(RecorderFailureSummary.describe({'error': 'already_bound'}),
+        'error=already_bound');
+    expect(RecorderFailureSummary.describe({'reason': 'DeviceAlreadyBound'}),
+        'reason=Device Already Bound');
+    expect(RecorderFailureSummary.describe({'message': '设备已绑定', 'status': 409}),
+        'message=设备已绑定；status=409');
+    expect(RecorderFailureSummary.describe({}), contains('设备未提供'));
+  });
+  test('untrusted failure fields cannot copy secrets or identifiers into logs',
+      () {
+    const secret = 'CkF1VHfnWcGSeEjEdhz79SwHqTn0QIHrR2gB7DdOgKY=';
+    final summary = RecorderFailureSummary.describe({
+      'error': 'already bound $secret',
+      'reason': 'owner 13800000000 AB00000000000001',
+      'message': 'token=test-only-session\r\nsecret=$secret',
+      'status': {'token': 'private-nested-value'},
+      'sharedSecret': secret,
+      'unknown-private-key': 'private-value',
+    });
+    expect(summary, contains('already bound'));
+    for (final value in [
+      secret,
+      '13800000000',
+      'AB00000000000001',
+      'test-only-session',
+      'private-nested-value',
+      'unknown-private-key',
+      '\n'
+    ]) {
+      expect(summary, isNot(contains(value)));
+    }
+    expect(
+        RecorderFailureSummary.describe({'error': 'x' * 1000}), 'error=内容已隐藏');
+  });
   test('OTA-only peripheral cannot become a business profile', () {
     expect(
         RecorderProfile.identify({

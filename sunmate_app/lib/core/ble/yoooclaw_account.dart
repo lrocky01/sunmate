@@ -353,12 +353,16 @@ class YoooClawAccount {
     if (records is! List || records.length > 1000) {
       throw const OfficialAccountException('账号设备列表缺失或格式不兼容');
     }
+    _appendDiagnostic('设备响应结构：顶层 ${result.length} 字段；data ${data.length} 字段；'
+        '设备记录 ${records.length} 条（仅记录数量和已知字段类型，不输出原始内容）');
     _clearBindings();
     _revision++;
     totalDevices = records.length;
     final counts = <String, int>{};
-    for (final record in records) {
+    for (var index = 0; index < records.length; index++) {
+      final record = records[index];
       if (record is Map<String, dynamic>) {
+        if (index < 5) _appendDiagnostic(_recordShape(index + 1, record));
         final serial = record['externalDeviceId'];
         if (serial is String &&
             RegExp(r'^[A-Za-z]{2}[0-9]{14}$').hasMatch(serial.trim())) {
@@ -388,6 +392,35 @@ class YoooClawAccount {
     _appendDiagnostic('设备资料：记录 $totalDevices；可恢复 ${_bindings.length}；'
         'sharedSecret 字段缺失 $missingSharedSecretDevices');
     return List.unmodifiable(_bindings);
+  }
+
+  String _recordShape(int index, Map<String, dynamic> record) {
+    String shape(Object? value) => value == null
+        ? 'null'
+        : value is String
+            ? (value.isEmpty ? '空字符串' : '非空字符串')
+            : value is Map
+                ? '对象'
+                : value is List
+                    ? '数组'
+                    : '其它类型';
+    String fields(Map map, List<String> names) => names
+        .map((name) =>
+            '$name=${map.containsKey(name) ? shape(map[name]) : "缺失"}')
+        .join(', ');
+    const names = [
+      'externalDeviceId',
+      'externalDeviceName',
+      'deviceType',
+      'extInfo'
+    ];
+    const extNames = ['mac', 'sharedSecret', 'uuid'];
+    final info = record['extInfo'];
+    final extra = record.keys.where((key) => !names.contains(key)).length;
+    final ext = info is Map
+        ? '扩展 ${info.length} 字段（额外 ${info.keys.where((key) => !extNames.contains(key)).length}）：${fields(info, extNames)}'
+        : '扩展不是对象';
+    return '设备记录 #$index：${record.length} 字段（额外 $extra）；${fields(record, names)}；$ext';
   }
 
   RecorderAccountSession sessionForDevice(AccountRecorderDevice selected) {

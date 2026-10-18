@@ -4,6 +4,73 @@ import 'ble_constants.dart';
 
 enum RecorderProtocol { telink, aiNote6095 }
 
+/// 失败详情只输出有限描述词和状态码，不序列化设备原始响应或凭据。
+class RecorderFailureSummary {
+  static final _words = {
+    ...('already bound bind binding bond bonded paired pair device is has not '
+            'need needs must please unbind first to this request failed failure '
+            'error invalid param params parameter parameters timestamp time out '
+            'timeout busy in progress mode denied rejected unsupported support '
+            'unbound success identity authentication auth required mismatch '
+            'missing user other owner different connected disconnect encrypted '
+            'encryption active expired new old no permission verification code '
+            'sign signature key secret shared local memory storage full bad value '
+            'state unknown same remote protocol limit length format cancel '
+            'cancelled canceled confirm account factory locked lock operation '
+            'init ready unpair ble card registered false true null fail cannot '
+            'can be a the of for with without by on and or reset')
+        .split(' '),
+    '设备已绑定',
+    '已绑定',
+    '重复绑定',
+    '请求无效',
+    '参数错误',
+    '设备忙',
+    '需要先解绑',
+    '绑定失败',
+    '已配对',
+    '未进入配对模式',
+  };
+
+  static String describe(Map<String, dynamic> params) {
+    final fields = <String>[];
+    // 官方 Telink 依次取 error / reason / message / status；同时保留数字 code。
+    for (final field in ['error', 'reason', 'message', 'status', 'code']) {
+      if (!params.containsKey(field)) continue;
+      final value = params[field];
+      String summary;
+      if (value == null) {
+        summary = 'null';
+      } else if (value is bool) {
+        summary = '$value';
+      } else if ((field == 'status' || field == 'code') &&
+          (value is num || value is String) &&
+          RegExp(r'^-?[0-9]{1,6}$').hasMatch('$value')) {
+        summary = '$value';
+      } else if (value is String && value.length <= 256) {
+        summary = value
+            .replaceAllMapped(
+                RegExp(r'([a-z])([A-Z])'), (match) => '${match[1]} ${match[2]}')
+            .replaceAll(RegExp(r'[^A-Za-z0-9_ .:\-\u4e00-\u9fff]'), ' ')
+            .replaceAllMapped(
+                RegExp(r'[A-Za-z0-9]+|[\u4e00-\u9fff]+'),
+                (match) => _words.contains(match[0]!.toLowerCase())
+                    ? match[0]!
+                    : '[已隐藏]')
+            .replaceAll(RegExp(r'\s+'), ' ')
+            .trim();
+        if (summary.isEmpty) summary = '空文本';
+      } else {
+        summary = '内容已隐藏';
+      }
+      fields.add('$field=$summary');
+    }
+    return fields.isEmpty
+        ? '设备未提供 error/reason/message/status/code'
+        : fields.join('；');
+  }
+}
+
 class RecorderProfile {
   final RecorderProtocol protocol;
   final String service;

@@ -45,3 +45,7 @@
 - 安装包：build_output/SunMate-1.0.18+19.ipa，8,584,592字节。
 - SHA-256：79fb44c10ddcc16b40523bda67371d11737eb8840d875949b6fe4f8d04d23544。
 - 已核对Info.plist=1.0.18 / Build19、ANCS API、原生状态字段及Keychain插件；Runner未签名，沿用之前的自签名安装方式。
+
+## 后续真机反馈
+
+2026-10-18 16:03，正常bindRequest已发出，卡片回复bindError后由App停止连接；未进入verifyRequest或服务器/check。原测试预期的首次协商未被实体卡接受，不能将离线用例通过视为实体绑定成功。下一版补齐失败原因，见 [1.0.19诊断说明](IOS_BLE_TEST_1.0.19.md)。
