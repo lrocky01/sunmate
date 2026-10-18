@@ -75,6 +75,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   int _batteryLevel = 0;
   String _deviceName = '未连接设备';
   String _serialNumber = '--';
+  String _serialSource = '未取得';
+  String? _advertisedSerial;
   String _phase = '未连接';
   Uint8List? _lastRecordedBytes;
   String? lastErrorMessage;
@@ -149,10 +151,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.19+20',
+        'SunMate 1.0.20+21',
         '当前阶段: $_phase',
         '设备: $_deviceName',
-        '设备上报 SN: $_serialNumber',
+        '设备匹配 SN: $_serialNumber；来源: $_serialSource',
         '协议: ${_profile?.protocol.name ?? "未识别"}',
         '链路: $isLinkConnected; 业务就绪: $_isConnected; 通知授权属性: ${_ancsAuthorized ?? "未知"}',
         '原生状态: ${connectionDetails.nativeStateLabel}; 系统已连接服务匹配: ${_systemConnectedMatch ?? "未查询"}; 广播可连接: ${_advertisementConnectable ?? "未知"}',
@@ -289,6 +291,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _systemConnectedMatch = null;
       _advertisementConnectable = null;
       _serialNumber = _reportedSerials[device.remoteId.str] ?? '--';
+      _serialSource = _serialNumber == '--' ? '未取得' : '先前设备记录';
+      _advertisedSerial = null;
       _batteryLevel = 0;
       _phase = '准备连接';
       _ready = Completer<bool>();
@@ -398,6 +402,35 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (profile == null)
         throw StateError('未找到唯一完整的已知业务 profile；保留 GATT 日志，不向未知或 OTA 特征写入');
       _profile = profile;
+      if (profile.protocol == RecorderProtocol.telink) {
+        final serials = <String>{};
+        for (final result in FlutterBluePlus.lastScanResults
+            .where((r) => r.device.remoteId == device.remoteId)) {
+          final age = DateTime.now().difference(result.timeStamp);
+          if (age.isNegative || age > const Duration(seconds: 30)) continue;
+          final serial = RecorderAdvertisementSerial.telink(
+              result.advertisementData.manufacturerData);
+          if (serial != null) serials.add(serial);
+        }
+        if (serials.length > 1) throw StateError('同一设备的广播 SN 冲突，未加载账号密钥');
+        if (serials.isNotEmpty) {
+          final serial = serials.single;
+          if ((_serialNumber != '--' && _serialNumber != serial) ||
+              (accountSession != null &&
+                  accountSession.serialNumber != serial)) {
+            throw const OfficialAccountException('广播 SN 与设备记录或所选账号设备不一致，未继续鉴权');
+          }
+          _advertisedSerial = serial;
+          _serialNumber = serial;
+          _serialSource = '本次设备广播（待身份挑战验证）';
+          _log('已从真实厂商广播取得完整 SN，并匹配 Telink GATT；仍需身份挑战验证');
+        }
+      }
+      if (_serialNumber != '--' &&
+          accountSession != null &&
+          _serialNumber != accountSession.serialNumber) {
+        throw const OfficialAccountException('设备 SN 与所选账号设备不一致，未继续鉴权');
+      }
       _decoder = RecorderEventDecoder(profile.protocol);
       _authentication = RecorderAuthentication(
         protocol: profile.protocol,
@@ -493,6 +526,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (!_ready!.isCompleted) {
         if (profile.protocol == RecorderProtocol.telink &&
             !_hasSharedKey &&
+            !(accountSession?.hasRecoverableKey ?? false) &&
             !_sawManufacturerChallenge) {
           _phase = '等待真实首次验机';
           _log('本机尚无可用密钥；通道已就绪，按官方流程发送一次正常绑定请求');
@@ -657,10 +691,15 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       Map<String, dynamic> params, int generation) async {
     _log(
         '设备事件 method=$safeMethod success=${params["success"] is bool ? params["success"] : "未提供"}');
-    // 只接受设备上报 SN，不再从广告名或 hash 拼造序列号。
+    // 设备事件 SN 必须与本次广播一致；不从广告名或 hash 拼造序列号。
     if (params['sn'] is String &&
         RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(params['sn'] as String)) {
-      _serialNumber = params['sn'] as String;
+      final reported = (params['sn'] as String).toUpperCase();
+      if (_advertisedSerial != null && reported != _advertisedSerial) {
+        throw const OfficialAccountException('设备事件 SN 与本次广播 SN 不一致，未继续鉴权');
+      }
+      _serialNumber = reported;
+      _serialSource = '本次设备事件';
       final id = _device?.remoteId.str;
       if (id != null) _reportedSerials[id] = _serialNumber;
       if (_activeAccountSession != null &&
@@ -669,6 +708,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       }
     }
     if (method == 'verifyRequest') {
+      if (_activeAccountSession?.hasRecoverableKey ?? false) {
+        throw const OfficialAccountException(
+            '账号已有共享密钥，但设备请求首次验机；未重新协商，请保留当前绑定和诊断');
+      }
       _phase = '厂商验机';
       final reply = await _authentication!.answerManufacturer(params);
       _checkGeneration(generation);
@@ -686,6 +729,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         }
       }
       if (!_hasSharedKey) {
+        if (_activeAccountSession?.hasRecoverableKey ?? false) {
+          throw const OfficialAccountException(
+              '账号已有可恢复密钥，但当前 SN / GATT 协议未能匹配；请重新扫描，不发送新的绑定请求');
+        }
         if (_profile?.protocol == RecorderProtocol.telink &&
             _authentication?.verifier != null) {
           _phase = '等待真实首次验机';
@@ -759,6 +806,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         !isLinkConnected ||
         _isConnected) return;
     _isConnected = true;
+    if (_advertisedSerial != null && _serialSource == '本次设备广播（待身份挑战验证）') {
+      _serialSource = '本次设备广播（身份挑战已验证）';
+    }
     _phase = '设备业务已验证';
     lastErrorMessage = null;
     _log('本次身份挑战验证成功，事件和音频通道均已确认');

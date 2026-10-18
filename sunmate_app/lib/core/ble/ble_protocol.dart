@@ -4,6 +4,37 @@ import 'ble_constants.dart';
 
 enum RecorderProtocol { telink, aiNote6095 }
 
+/// 仅解析已确认的 Telink 厂商广播布局，不从名称或任意字节中搜索 SN。
+class RecorderAdvertisementSerial {
+  static String? telink(Map<int, List<int>> data) {
+    final main = data[0x1c0d];
+    if (main == null || (main.length != 2 && main.length != 20) || main[0] != 1)
+      return null;
+    String? decode(List<int> bytes) {
+      if (bytes.length != 16 || bytes.any((b) => b < 0 || b > 127)) return null;
+      final serial = ascii.decode(bytes);
+      return RegExp(r'^[A-Za-z]{2}[0-9]{14}$').hasMatch(serial)
+          ? serial.toUpperCase()
+          : null;
+    }
+
+    String? combined;
+    if (main.length == 20) {
+      if (main[2] != 0x1d || main[3] != 0x2c) return null;
+      combined = decode(main.sublist(4));
+      if (combined == null) return null;
+    }
+    final separate = data[0x2c1d];
+    if (separate != null) {
+      final serial = decode(separate);
+      if (serial == null || (combined != null && serial != combined))
+        return null;
+      return serial;
+    }
+    return combined;
+  }
+}
+
 /// 失败详情只输出有限描述词和状态码，不序列化设备原始响应或凭据。
 class RecorderFailureSummary {
   static final _words = {

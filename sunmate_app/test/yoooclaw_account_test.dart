@@ -436,6 +436,7 @@ void main() {
     await client.login('13800000000', '1234');
     await client.loadBindings();
     final session = client.sessionForDevice(client.devices.single);
+    expect(session.hasRecoverableKey, true);
     final store = MemoryKeyStore();
     await expectLater(
         session.restoreKey!(
@@ -479,6 +480,7 @@ void main() {
     expect(await client.loadBindings(), isEmpty);
     final selected = client.devices.single;
     final oldSession = client.sessionForDevice(selected);
+    expect(oldSession.hasRecoverableKey, false);
     adapter.respond = (_) => response({
           'code': '000000',
           'data': {'deviceList': []}

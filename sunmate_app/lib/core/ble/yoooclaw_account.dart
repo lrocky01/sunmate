@@ -437,63 +437,67 @@ class YoooClawAccount {
     }
 
     ensureCurrent(serial);
-    return RecorderAccountSession(serial, (
-        {required checkContent, required mac, required sn}) async {
-      ensureCurrent(sn);
-      if (checkContent.isEmpty ||
-          checkContent.length > 2048 ||
-          mac.isEmpty ||
-          mac.length > 128) {
-        throw const OfficialAccountException('设备挑战格式无效');
-      }
-      final result = await _post(
-          deviceService, '/api/device/toc/externalDeviceBind/check',
-          stage: OfficialAccountStage.verification,
-          authenticated: true,
-          data: {'checkContent': checkContent, 'mac': mac, 'sn': sn});
-      ensureCurrent(sn);
-      _requireSuccess(result, stage: OfficialAccountStage.verification);
-      final data = result['data'];
-      final hmac = data is Map ? data['hmac'] : null;
-      if (hmac is! String || hmac.trim().isEmpty || hmac.length > 2048) {
-        throw const OfficialAccountException('官方验机未返回有效答复');
-      }
-      checkedMac = mac;
-      return hmac.trim();
-    }, ({required sn, required mac, required sharedSecret}) async {
-      ensureCurrent(sn);
-      if (checkedMac != mac) {
-        throw const OfficialAccountException('缺少同一设备的真实验机结果，未同步绑定');
-      }
-      RecorderCryptography.decode32(sharedSecret);
-      if (mac.isEmpty || mac.length > 128) {
-        throw const OfficialAccountException('设备未提供有效 MAC，未同步绑定');
-      }
-      final result = await _post(
-          deviceService, '/api/device/toc/externalDeviceBind/bind',
-          stage: OfficialAccountStage.binding,
-          authenticated: true,
-          data: {
-            'deviceId': serial,
-            'deviceName': selected.deviceName,
-            'extInfo': {
-              'mac': mac,
-              'sharedSecret': sharedSecret,
-              if (selected.uuid != null) 'uuid': selected.uuid
-            }
-          });
-      ensureCurrent(sn);
-      _requireSuccess(result, stage: OfficialAccountStage.binding);
-    }, restoreKey: (deviceId, protocol, detectedSerial, store) async {
-      ensureCurrent(detectedSerial);
-      final candidates = _bindings
-          .where((binding) => binding.matches(detectedSerial, protocol))
-          .toList();
-      if (candidates.length != 1) return false;
-      await candidates.single.saveForDevice(store, deviceId);
-      ensureCurrent(detectedSerial);
-      return true;
-    });
+    return RecorderAccountSession(
+        serial,
+        ({required checkContent, required mac, required sn}) async {
+          ensureCurrent(sn);
+          if (checkContent.isEmpty ||
+              checkContent.length > 2048 ||
+              mac.isEmpty ||
+              mac.length > 128) {
+            throw const OfficialAccountException('设备挑战格式无效');
+          }
+          final result = await _post(
+              deviceService, '/api/device/toc/externalDeviceBind/check',
+              stage: OfficialAccountStage.verification,
+              authenticated: true,
+              data: {'checkContent': checkContent, 'mac': mac, 'sn': sn});
+          ensureCurrent(sn);
+          _requireSuccess(result, stage: OfficialAccountStage.verification);
+          final data = result['data'];
+          final hmac = data is Map ? data['hmac'] : null;
+          if (hmac is! String || hmac.trim().isEmpty || hmac.length > 2048) {
+            throw const OfficialAccountException('官方验机未返回有效答复');
+          }
+          checkedMac = mac;
+          return hmac.trim();
+        },
+        ({required sn, required mac, required sharedSecret}) async {
+          ensureCurrent(sn);
+          if (checkedMac != mac) {
+            throw const OfficialAccountException('缺少同一设备的真实验机结果，未同步绑定');
+          }
+          RecorderCryptography.decode32(sharedSecret);
+          if (mac.isEmpty || mac.length > 128) {
+            throw const OfficialAccountException('设备未提供有效 MAC，未同步绑定');
+          }
+          final result = await _post(
+              deviceService, '/api/device/toc/externalDeviceBind/bind',
+              stage: OfficialAccountStage.binding,
+              authenticated: true,
+              data: {
+                'deviceId': serial,
+                'deviceName': selected.deviceName,
+                'extInfo': {
+                  'mac': mac,
+                  'sharedSecret': sharedSecret,
+                  if (selected.uuid != null) 'uuid': selected.uuid
+                }
+              });
+          ensureCurrent(sn);
+          _requireSuccess(result, stage: OfficialAccountStage.binding);
+        },
+        hasRecoverableKey: selected.hasRecoverableKey,
+        restoreKey: (deviceId, protocol, detectedSerial, store) async {
+          ensureCurrent(detectedSerial);
+          final candidates = _bindings
+              .where((binding) => binding.matches(detectedSerial, protocol))
+              .toList();
+          if (candidates.length != 1) return false;
+          await candidates.single.saveForDevice(store, deviceId);
+          ensureCurrent(detectedSerial);
+          return true;
+        });
   }
 
   void _clearBindings() {

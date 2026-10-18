@@ -101,10 +101,11 @@ class RecorderAccountSession {
   final String serialNumber;
   final ManufacturerVerifier verifier;
   final PairingCommitter committer;
+  final bool hasRecoverableKey;
   final Future<bool> Function(String deviceId, RecorderProtocol protocol,
       String detectedSerial, RecorderKeyStore store)? restoreKey;
   RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
-      {this.restoreKey});
+      {this.restoreKey, this.hasRecoverableKey = false});
 }
 
 enum RecorderAuthenticationState {

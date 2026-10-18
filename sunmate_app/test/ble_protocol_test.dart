@@ -5,6 +5,50 @@ import 'package:sunmate_app/core/ble/ble_json_rpc.dart';
 import 'package:sunmate_app/core/ble/ble_protocol.dart';
 
 void main() {
+  test('Telink serial parses exact combined and separate manufacturer layouts',
+      () {
+    const sn = 'AB00000000000001';
+    expect(
+        RecorderAdvertisementSerial.telink({
+          0x1c0d: [1, 0x11, 0x1d, 0x2c, ...ascii.encode(sn)]
+        }),
+        sn);
+    expect(
+        RecorderAdvertisementSerial.telink({
+          0x1c0d: [1, 0xff],
+          0x2c1d: ascii.encode(sn)
+        }),
+        sn);
+  });
+  test('serial parser rejects unknown, truncated, shifted and conflicting data',
+      () {
+    final serial = ascii.encode('AB00000000000001');
+    final combined = [1, 0x11, 0x1d, 0x2c, ...serial];
+    for (final data in <Map<int, List<int>>>[
+      {},
+      {0x2c1d: serial},
+      {0x2c0d: combined},
+      {
+        0x1c0d: [2, ...combined.skip(1)]
+      },
+      {0x1c0d: combined.sublist(0, 19)},
+      {
+        0x1c0d: [0, ...combined]
+      },
+      {
+        0x1c0d: [1, 0x11, 0x2c, 0x1d, ...serial]
+      },
+      {
+        0x1c0d: [1, 0x11, 0x1d, 0x2c, ...ascii.encode('AB0000000000000 ')]
+      },
+      {
+        0x1c0d: [1, 0x11, 0x1d, 0x2c, 255, ...serial.skip(1)]
+      },
+      {0x1c0d: combined, 0x2c1d: ascii.encode('AB00000000000002')},
+    ]) {
+      expect(RecorderAdvertisementSerial.telink(data), isNull);
+    }
+  });
   test('failure details retain descriptive fields without inventing a cause',
       () {
     expect(RecorderFailureSummary.describe({'error': 'already_bound'}),

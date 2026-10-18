@@ -16,6 +16,7 @@ import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 /// 模拟 GATT 操作与设备异步事件，检查驱动不会把 ATT 成功误当业务成功。
 final class TestBlePlatform extends FlutterBluePlusPlatform {
+  final scans = StreamController<BmScanResponse>.broadcast();
   final connections = StreamController<BmConnectionStateResponse>.broadcast();
   final services = StreamController<BmDiscoverServicesResult>.broadcast();
   final descriptors = StreamController<BmDescriptorData>.broadcast();
@@ -33,10 +34,37 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   bool authenticate = false;
   bool firstBinding = false;
   bool identityOnSubscribe = false;
+  bool manufacturerOnSubscribe = false;
   bool requiresBindRequest = false;
   bool rejectBindRequest = false;
   Uint8List? peerSecret;
   String? reportedSn;
+
+  @override
+  Stream<BmScanResponse> get onScanResponse => scans.stream;
+  @override
+  Future<bool> startScan(BmScanSettings request) async => true;
+  @override
+  Future<bool> stopScan(BmStopScanRequest request) async => true;
+
+  Future<void> advertise(DeviceIdentifier id, Map<int, List<int>> data) async {
+    await FlutterBluePlus.startScan();
+    scans.add(BmScanResponse(advertisements: [
+      BmScanAdvertisement(
+          remoteId: id,
+          platformName: 'C·ONE-test',
+          advName: 'C·ONE-test',
+          connectable: true,
+          txPowerLevel: null,
+          appearance: null,
+          manufacturerData: data,
+          serviceData: {},
+          serviceUuids: [Guid('1812')],
+          rssi: -45)
+    ], success: true, errorCode: 0, errorString: ''));
+    await FlutterBluePlus.scanResults
+        .firstWhere((results) => results.any((r) => r.device.remoteId == id));
+  }
 
   @override
   Stream<BmConnectionStateResponse> get onConnectionStateChanged =>
@@ -138,6 +166,18 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
 
   @override
   Future<bool> setNotifyValue(BmSetNotifyValueRequest request) async {
+    if (manufacturerOnSubscribe &&
+        !rejectNotify &&
+        request.characteristicUuid.str == BleConstants.charDeviceEvent) {
+      event(request.remoteId, {
+        'method': 'verifyRequest',
+        'params': {
+          'sn': 'AB00000000000001',
+          'mac': 'test-only-mac',
+          'encrypted': 'test-only-fresh-challenge'
+        }
+      });
+    }
     if (identityOnSubscribe &&
         !rejectNotify &&
         request.characteristicUuid.str == BleConstants.charDeviceEvent) {
@@ -296,6 +336,7 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
     authenticate = false;
     firstBinding = false;
     identityOnSubscribe = false;
+    manufacturerOnSubscribe = false;
     requiresBindRequest = false;
     rejectBindRequest = false;
     peerSecret = null;
@@ -309,6 +350,21 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
     replySuccess = false;
   }
 }
+
+RecorderAccountSession sessionWithBinding(OwnedRecorderBinding binding,
+        {void Function()? onRestore}) =>
+    RecorderAccountSession(
+        binding.serialNumber,
+        ({required checkContent, required mac, required sn}) async =>
+            throw StateError('No new binding expected'),
+        ({required sn, required mac, required sharedSecret}) async =>
+            throw StateError('No new binding expected'),
+        hasRecoverableKey: true, restoreKey: (id, protocol, sn, store) async {
+      onRestore?.call();
+      if (!binding.matches(sn, protocol)) return false;
+      await binding.saveForDevice(store, id);
+      return true;
+    });
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -330,6 +386,7 @@ void main() {
   });
   tearDown(() async {
     await driver.dispose();
+    await FlutterBluePlus.stopScan();
   });
 
   test('OTA-only device is disconnected without a single write', () async {
@@ -444,22 +501,104 @@ void main() {
     platform.reportedSn = 'AB00000000000001';
     final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
     addTearDown(binding.clear);
-    final session = RecorderAccountSession(
-        binding.serialNumber,
-        ({required checkContent, required mac, required sn}) async =>
-            throw StateError('No new binding expected'),
-        ({required sn, required mac, required sharedSecret}) async =>
-            throw StateError('No new binding expected'),
-        restoreKey: (id, protocol, sn, store) async {
-      if (!binding.matches(sn, protocol)) return false;
-      await binding.saveForDevice(store, id);
-      return true;
-    });
+    final session = sessionWithBinding(binding);
     expect(await driver.connectDevice(device, accountSession: session), true);
     expect(keys.writes, 1);
     expect(platform.connectCount, 1);
     expect(driver.snNumber, binding.serialNumber);
     expect(driver.diagnosticText, isNot(contains(base64Encode(shared))));
+  });
+
+  for (final scenario in [
+    'account mismatch',
+    'event mismatch',
+    'invalid broadcast',
+    'different peripheral',
+    'unknown GATT',
+    'manufacturer challenge'
+  ]) {
+    test('account recovery rejects $scenario before using its key', () async {
+      await driver.dispose();
+      final keys = MemoryKeyStore();
+      driver = AiNote6095Driver(
+          keyStore: keys, authenticationTimeout: const Duration(seconds: 2));
+      platform.authenticate = true;
+      platform.identityOnSubscribe = true;
+      if (scenario == 'manufacturer challenge') {
+        platform.identityOnSubscribe = false;
+        platform.manufacturerOnSubscribe = true;
+      }
+      if (scenario == 'event mismatch')
+        platform.reportedSn = 'AB00000000000002';
+      if (scenario == 'unknown GATT') platform.otaOnly = true;
+      final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
+      addTearDown(binding.clear);
+      final sn = scenario == 'account mismatch'
+          ? 'AB00000000000002'
+          : binding.serialNumber;
+      await platform.advertise(
+          scenario == 'different peripheral'
+              ? const DeviceIdentifier('other-device')
+              : device.remoteId,
+          {
+            0x1c0d: [
+              1,
+              0x11,
+              0x1d,
+              0x2c,
+              ...ascii.encode(
+                  scenario == 'invalid broadcast' ? 'AB0000000000000 ' : sn)
+            ]
+          });
+      var restored = false;
+      final session =
+          sessionWithBinding(binding, onRestore: () => restored = true);
+      expect(
+          await driver.connectDevice(device, accountSession: session), false);
+      expect(restored, false);
+      expect(keys.writes, 0);
+      expect(platform.writes, isEmpty);
+      expect(driver.isConnected, false);
+      if (scenario == 'manufacturer challenge') {
+        expect(driver.lastErrorMessage, contains('未重新协商'));
+      }
+    });
+  }
+
+  test('recovered account key still needs a successful fresh AES reply',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(
+        keyStore: keys, authenticationTimeout: const Duration(seconds: 2));
+    platform.authenticate = true;
+    platform.identityOnSubscribe = true;
+    final wrong = record();
+    (wrong['extInfo'] as Map)['sharedSecret'] =
+        base64Encode(shared.reversed.toList());
+    final binding = OwnedRecorderBinding.fromAccountRecord(wrong)!;
+    addTearDown(binding.clear);
+    await platform.advertise(device.remoteId, {
+      0x1c0d: [1, 0x11],
+      0x2c1d: ascii.encode(binding.serialNumber)
+    });
+    expect(
+        await driver.connectDevice(device,
+            accountSession: sessionWithBinding(binding)),
+        false);
+    expect(driver.isConnected, false);
+    expect(driver.connectionDetails.identityVerified, false);
+    expect(driver.diagnosticText,
+        contains('method=verifyIdentityResult success=false'));
+    expect(
+        (await SharedPreferences.getInstance())
+            .getString('sunmate_verified_ble_device_id_v2'),
+        isNull);
+    expect(
+        platform.writes
+            .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+            .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method']),
+        isNot(contains('bindRequest')));
   });
 
   test('different reported SN cannot consume selected account key', () async {
@@ -481,6 +620,32 @@ void main() {
     expect(restored, false);
     expect(keys.writes, 0);
     expect(driver.lastErrorMessage, contains('SN'));
+  });
+
+  test('broadcast SN restores account key when early identity omits SN',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(
+        keyStore: keys, authenticationTimeout: const Duration(seconds: 2));
+    platform.authenticate = true;
+    platform.identityOnSubscribe = true;
+    final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
+    addTearDown(binding.clear);
+    await platform.advertise(device.remoteId, {
+      0x1c0d: [0x01, 0x11, 0x1d, 0x2c, ...ascii.encode(binding.serialNumber)]
+    });
+    final session = sessionWithBinding(binding);
+    expect(await driver.connectDevice(device, accountSession: session), true);
+    expect(driver.snNumber, binding.serialNumber);
+    expect(driver.diagnosticText, contains('本次设备广播'));
+    expect(keys.writes, 1);
+    final methods = platform.writes
+        .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+        .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method']);
+    expect(methods, contains('verifyIdentity'));
+    expect(methods, isNot(contains('bindRequest')));
+    expect(driver.diagnosticText, isNot(contains(base64Encode(shared))));
   });
 
   test(
