@@ -69,3 +69,7 @@ BleApiService本次库存共8个方法：设备列表、批量绑定状态、验
 | ev_ca8bd1de82f76e8bb4da739195fc666e906724a714fc4746f52aca9f73e3847e | tools/ble_audit/android-live-2.2.2/rea-binderror-unbind-contract.json；仅静态契约，未执行 |
 | ev_0cc6822c8d3a7b979de993770573f97566aec38da2a3bcf0f8b7eda2f391a06a | tools/ble_audit/android-live-2.2.2/rea-account-batch-callers.json |
 | 页面结构/来源/空体边界 | docs/IOS_BLE_DEVICE_SETTINGS_AUDIT_2026-10-18.md及其device-settings-20261018证据 |
+
+## 继续核对结果
+
+后续找到官方本地key补上传入口，并用两版原始跳转确认sign类参数仅AI_NOTE_6095入口接受；新增接口、存储/回滚和实际Android页面核对见 [已绑定缺key续查](IOS_BLE_BOUND_KEY_RECOVERY_2026-10-18.md)。该补上传不是读回旧key，尚未执行。

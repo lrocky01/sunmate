@@ -71,3 +71,5 @@ CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HC
 最新无密钥分支的依据及验收步骤见 [1.0.18 手机测试说明](docs/IOS_BLE_TEST_1.0.18.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
 
 2026-10-18 1.0.18+19实体反馈：链路/GATT成功，正常bindRequest后设备返回bindError，尚未进入verifyRequest或/check。官方bindError详情依次取error/reason/message/status；1.0.19+20补安全摘要，不从87字节包长猜原因，不自动执行解绑。账号服务器字段与页面来源的完整边界见 [数据映射](docs/IOS_BLE_ACCOUNT_DATA_MAP_2026-10-18.md)。
+
+2026-10-18恢复路径续查：官方retryBindFromLocalDevice是用当前本机key补上传/bind，非密钥恢复读取接口；入口位于OpenClaw SN资格检查。两版connectToDevice原始跳转明确拒绝Telink携带非空bindSign/confirmCode/rebindSign，这些入口参数仅AI_NOTE_6095接受，不能仅凭通用JSON构造器的可选字段给Telink补签名。完整依据与首次接入方案见 [续查报告](docs/IOS_BLE_BOUND_KEY_RECOVERY_2026-10-18.md)。
