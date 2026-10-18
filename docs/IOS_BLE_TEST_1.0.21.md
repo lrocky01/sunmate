@@ -30,4 +30,14 @@
 
 ## 构建交付状态
 
-本地检查已通过；接下来推送main，等待Actions原生编译、打包和artifact上传，再下载核对版本/插件/摘要。IPA仍按现有无签名工作流生成，不修改CI或签名策略。
+代码提交 `ddb9d9f4de4c449989ad33492e978662f8398cf1` 已推送main；[Actions #37](https://github.com/lrocky01/sunmate/actions/runs/39125329629) 的检查、原生编译、打包和artifact上传全部成功，artifact为 `12136131522`。
+
+已下载并核对：
+
+- 本机文件：`build_output/SunMate-1.0.21+22.ipa`，8,603,671字节。
+- IPA SHA-256：`3913c2def331040dbc3f43faf8d899d8818e151a92a52e0233a10dc7de03f9f5`。
+- artifact ZIP SHA-256：`976e4c2de12a73a4545a1e7b989c053f7ff3a0a0c81d8c4845c5342b5fda52cf`，与GitHub artifact digest一致。
+- 包内Info.plist：版本1.0.21、Build22、bundle `com.sunmate.app`；安全存储/BLE插件、ANCS原生选项、新登录存储键及首次添加文案均存在，蓝牙/麦克风用途描述存在。
+- Runner无签名，沿用此前自签安装方式；未修改CI、签名策略或私有端点。
+
+本版源码、检查、构建和下载交付完成。实体配对、账号会话长期有效性及稳定录音仍须手机验证；登录有效期由厂商服务器决定，不承诺永久免验证码。
