@@ -26,3 +26,13 @@
 6. 保持一分钟并用卡片按键录音，验证私有ASR实际收到并返回转写。若失败，提供本版蓝牙及脱敏账号诊断，不提供任何凭据。
 
 目前日志证明此前停在系统connecting、尚未进入GATT，不能认定鉴权材料缺失导致；本版补齐用户可控的账号解绑对照流程，实体稳定连接与录音仍须真机确认。
+
+## 构建与下载记录
+
+- 源码提交：`11d310fd7e4020bf0490025c5d0b7e5cbabfa9eb`，已推main。
+- [GitHub Actions #38](https://github.com/lrocky01/sunmate/actions/runs/39131422659)成功；artifact `12137879103`。
+- 本机文件：`build_output/SunMate-1.0.22+23.ipa`，8,610,699字节。
+- IPA SHA-256：`1e8f6ad31c91b8b4affaee80fd0741d29836bb8140e31cb661ae237e6fa5f4b1`。
+- Artifact ZIP SHA-256：`078a6d7e0cdb9c9cbe53214de5b143107a3e92bfd7e8c209bf23001c015cc43f`，与GitHub摘要一致。
+- 包内版本1.0.22/Build23、bundle `com.sunmate.app`、安全存储/BLE/ANCS组件、独立归档与登录存储键、解绑入口及正常接口路径均核对通过。Runner未签名，按此前个人自签方式安装。
+- 未执行真实厂商解绑或卡片清理。实体连接、重新绑定和录音仍待用户手机测试。
