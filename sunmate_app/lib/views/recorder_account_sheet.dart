@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../providers/device_provider.dart';
+import 'recorder_device_status.dart';
 
 class RecorderAccountSheet extends ConsumerStatefulWidget {
   final YoooClawAccount? account;
@@ -248,17 +249,19 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                 if (widget.onSelectDevice != null && _account.isLoggedIn) ...[
                   const Text(
                       '选择连接后，将验证卡片的真实挑战，并将新绑定资料同步到自己的官方账号。录音、MOSS-ASR 和 Hermes 仍直连私有端点。'),
-                  for (final device in _account.devices)
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: Text(device.deviceName),
-                      subtitle: Text('SN：${device.serialNumber}'),
-                      trailing: FilledButton(
-                          onPressed: _busy
-                              ? null
-                              : () => widget.onSelectDevice!(device),
-                          child: const Text('选择并搜索')),
-                    ),
+                  for (final device in _account.devices) ...[
+                    const Divider(height: 28),
+                    Text(device.deviceName,
+                        style: const TextStyle(
+                            fontSize: 17, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 10),
+                    RecorderAccountDeviceInfo(device: device),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                        onPressed:
+                            _busy ? null : () => widget.onSelectDevice!(device),
+                        child: const Text('选择并搜索')),
+                  ],
                 ],
                 if (widget.onSelectDevice == null)
                   for (final binding in _bindings)

@@ -105,6 +105,23 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     snapshot[@"remote_id"] = remoteId;
     snapshot[@"requires_ancs"] = self.sunmateAncsRequired[remoteId] ?: @NO;
     snapshot[@"state"] = @(peripheral.state);
+    snapshot[@"central_state"] = @(self.centralManager.state);
+    snapshot[@"connection_pending"] = @([self.currentlyConnectingPeripherals objectForKey:remoteId] != nil);
+    if (self.centralManager.state == CBManagerStatePoweredOn) {
+        // 只报告当前选中 UUID 是否匹配，不导出其它外设标识。
+        NSArray<CBUUID *> *services = @[
+            [CBUUID UUIDWithString:@"1812"],
+            [CBUUID UUIDWithString:@"00010203-0405-0607-0809-0a0b0c0d1930"],
+            [CBUUID UUIDWithString:@"00010203-0405-0607-0809-0a0b0c0d1913"]
+        ];
+        BOOL matched = NO;
+        for (CBPeripheral *connected in [self.centralManager retrieveConnectedPeripheralsWithServices:services]) {
+            if ([connected.identifier isEqual:peripheral.identifier]) { matched = YES; break; }
+        }
+        snapshot[@"system_connected_match"] = @(matched);
+    } else {
+        snapshot[@"system_connected_match"] = [NSNull null];
+    }
 #if TARGET_OS_IOS
     if (@available(iOS 13.0, *)) {
         snapshot[@"ancs_authorized"] = @(peripheral.ancsAuthorized);

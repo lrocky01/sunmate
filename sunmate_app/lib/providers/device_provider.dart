@@ -5,6 +5,7 @@ import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../core/ble/recorder_authentication.dart';
+import '../core/ble/recorder_connection_details.dart';
 import '../models/device_status.dart';
 
 /// 硬件驱动工厂全局 Provider
@@ -122,6 +123,7 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
   Future<bool> configureBleAncsRequest(bool enable) =>
       _factory.bleDriver.sendAncsConfig(enable: enable);
   bool? get ancsAuthorized => _factory.bleDriver.ancsAuthorized;
+  RecorderConnectionDetails get bleConnectionDetails => _factory.bleDriver.connectionDetails;
 
   Future<void> cancelBleConnection() => _factory.bleDriver.disconnect();
 

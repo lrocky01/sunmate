@@ -72,3 +72,18 @@
 - [已完成] f70834b 已推送 main；Actions #32（39092396692）的分析、测试、原生编译、打包上传全部成功。下载并核对 Info.plist=1.0.16 / Build 17、Keychain 插件、ANCS API 与新增原生连接诊断标记。
 - 交付记录：build_output/SunMate-1.0.16+17.ipa，8,565,943 字节，SHA-256 6ff524c306ccbf5af052539728f5671bab0cc21fd01b3c5865b8fbd30c3c0aba。登录优先版本的实现、构建和下载交付已完成；手机步骤见 docs/IOS_BLE_TEST_1.0.16.md。
 - [待真机验证] /check、/bind 的真实账号接受结果、iPhone 系统连接/弹窗及稳定录音。未以桩测试、编译通过或 Android 静态代码宣称目标已达成。
+
+## 1.0.16+17 真机反馈：连接请求 pending
+
+- [已收到反馈] 2026-10-18 11:20:09 至 11:21:39，RequiresANCS=true 时原生已记录 connect_requested，CBPeripheral 始终 connecting；没有 connected、GATT 或业务鉴权事件。90 秒后由 App 截止触发 cancel_requested，随后系统返回 disconnected、error=nil。本次不是先连上再被业务鉴权拒绝的旧现象。
+- [已核对] 每 10 秒相同 nativeTime 的 connect_requested 是原生诊断快照重复读取，不代表重复提交 connect。ANCS=true 是 getter 返回值，不能替代本次 connected/SMP 成功或证明新弹窗出现；SN=-- 是尚无本次 GATT 设备上报。
+- [待用户对照] 当前包已有「蓝牙连接方式 → 仅录音连接」，需新日志确认 RequiresANCS=false 后是否能进入 GATT。在此结果前不自动改 ANCS 默认、不假定厂商接口拒绝、不反复打包。
+
+## 官方设置页核对与分层排查：1.0.17+18
+
+- [已收到反馈] 用户反馈仅录音方式仍不行，但未提供该次原始日志；Android 官方登录后可见保存设备，连接/配对成功后保持一分钟、按键有响应。不能由 Android 成功推出 iPhone 系统配对正常或云端必有共享密钥。
+- [已完成] REA 核对 connectToDevice / createBond 及静态调用者，复用2.2.2处理器证据；核对官方设置页名称/SN/状态/录音/屏幕/灯效/读取权限入口和连接能力门控。管理 Activity 和部分设置方法为空体的限制已明确记录，未假造指令。报告见 docs/IOS_BLE_DEVICE_SETTINGS_AUDIT_2026-10-18.md。
+- [已完成] 在现有连接/诊断页内补账号材料摘要、链路/GATT/鉴权/录音状态和可滚动设置；不把 ANCS 属性或已有密钥当就绪。原生增加有限服务范围内的系统连接布尔匹配、central状态和pending，广播记录可连接标记/RSSI/扫描年龄，区分快照与回调。
+- [已完成] 1.0.17+18 本地73项测试通过，App目录静态分析无错误/警告（11条原有弃用提示）；两种手机尺寸按两轮检查，临时截图测试已删除。本版是已授权排查界面的完善，保持 HAL/私有端点和鉴权规则，不宣称已修复实体连接。
+- [进行中] 推送 main、iOS 原生构建与安装包核对；测试步骤见 docs/IOS_BLE_TEST_1.0.17.md。
+- [待用户对照] 同一台 iPhone 的官方 App 在 Android 蓝牙关闭后是否能保持一分钟并响应按键；以及 RequiresANCS=false 的完整日志。若官方提出解绑或重置，停在提示处。

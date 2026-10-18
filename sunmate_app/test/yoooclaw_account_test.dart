@@ -64,6 +64,29 @@ void main() {
     };
   });
   tearDown(() => client.close());
+  test(
+      'device material summary distinguishes missing, invalid and supported recovery',
+      () {
+    final good = AccountRecorderDevice.fromRecord(record())!;
+    expect(good.hasRecoverableKey, true);
+    expect(good.hasMac, true);
+    expect(good.protocolLabel, 'telink');
+    final missing = AccountRecorderDevice.fromRecord(
+        {...record(), 'extInfo': <String, dynamic>{}})!;
+    expect(missing.hasSharedSecretField, false);
+    expect(missing.hasRecoverableKey, false);
+    final invalid =
+        AccountRecorderDevice.fromRecord(record(secret: 'invalid-test-key'))!;
+    expect(invalid.hasSharedSecretField, true);
+    expect(invalid.hasRecoverableKey, false);
+    final unsupported =
+        AccountRecorderDevice.fromRecord(record(type: 'UNKNOWN'))!;
+    expect(unsupported.hasSharedSecretField, true);
+    expect(unsupported.hasRecoverableKey, false);
+    final unparsed = AccountRecorderDevice.fromRecord(
+        {...record(), 'extInfo': 'unrecognized-test-shape'})!;
+    expect(unparsed.keyMaterialSummary, '绑定资料格式待核对');
+  });
   test('validated App channel login and account recovery use one service',
       () async {
     await client.sendSms('13800000000');

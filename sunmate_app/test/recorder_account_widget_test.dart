@@ -53,7 +53,7 @@ void main() {
             home: Scaffold(body: RecorderConnectionSheet(account: account)))));
     await tester.pumpAndSettle();
     expect(find.text('登录并连接录音卡'), findsOneWidget);
-    expect(find.text('搜索蓝牙录音卡设备'), findsNothing);
+    expect(find.text('录音卡连接设置'), findsNothing);
     expect(find.textContaining('当前录音卡 SN'), findsNothing);
     await tester.enterText(find.byType(TextField).at(0), '13800000000');
     await tester.enterText(find.byType(TextField).at(1), '1234');
@@ -67,6 +67,32 @@ void main() {
         matching: find.byType(SingleChildScrollView)));
     expect(scroll.controller!.offset, 0);
     expect(account.closed, false);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(account.closed, true);
+  });
+  testWidgets(
+      'device settings and scan failure remain scrollable on a small phone',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final account = WidgetAccount()..loggedIn = true;
+    await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(
+            home: Scaffold(body: RecorderConnectionSheet(account: account)))));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('选择并搜索'));
+    await tester.tap(find.text('选择并搜索'));
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('录音卡连接设置'), findsOneWidget);
+    await tester.tap(find.text('设备资料与连接方式'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('可恢复，仍需卡片验证'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 300));

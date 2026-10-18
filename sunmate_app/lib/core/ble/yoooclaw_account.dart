@@ -92,7 +92,28 @@ class AccountRecorderDevice {
   final String serialNumber;
   final String deviceName;
   final String? uuid;
-  AccountRecorderDevice._(this.serialNumber, this.deviceName, this.uuid);
+  final String protocolLabel;
+  final bool hasMac;
+  final bool hasSharedSecretField;
+  final bool hasRecoverableKey;
+  final bool hasStructuredBindingInfo;
+  AccountRecorderDevice._(
+      this.serialNumber,
+      this.deviceName,
+      this.uuid,
+      this.protocolLabel,
+      this.hasMac,
+      this.hasSharedSecretField,
+      this.hasRecoverableKey,
+      this.hasStructuredBindingInfo);
+
+  String get keyMaterialSummary => !hasStructuredBindingInfo
+      ? '绑定资料格式待核对'
+      : hasRecoverableKey
+          ? '可恢复，仍需卡片验证'
+          : hasSharedSecretField
+              ? '字段已返回，格式或设备类型不匹配'
+              : '账号未返回共享密钥';
 
   static AccountRecorderDevice? fromRecord(Map<String, dynamic> record) {
     final serial = record['externalDeviceId'];
@@ -101,6 +122,18 @@ class AccountRecorderDevice {
     final name = record['externalDeviceName'];
     final info = record['extInfo'];
     final uuid = info is Map ? info['uuid'] : null;
+    final binding = OwnedRecorderBinding.fromAccountRecord(record);
+    final recoverable = binding != null;
+    final protocol = binding?.protocol.name;
+    binding?.clear();
+    final mac = info is Map ? info['mac'] : null;
+    final type = record['deviceType'];
+    final safeType =
+        type is String && RegExp(r'^[A-Za-z0-9_]{1,32}$').hasMatch(type)
+            ? type
+            : type is num
+                ? '$type'
+                : '未提供或未识别';
     return AccountRecorderDevice._(
         serial.trim().toUpperCase(),
         name is String && name.isNotEmpty && name.length <= 64 ? name : '我的录音卡',
@@ -108,7 +141,12 @@ class AccountRecorderDevice {
                 RegExp(r'^[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$')
                     .hasMatch(uuid)
             ? uuid
-            : null);
+            : null,
+        protocol ?? safeType,
+        mac is String && mac.trim().isNotEmpty,
+        info is Map && info.containsKey('sharedSecret'),
+        recoverable,
+        info is Map);
   }
 }
 

@@ -8,6 +8,7 @@ import '../core/ble/yoooclaw_account.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
 import 'recorder_account_sheet.dart';
+import 'recorder_device_status.dart';
 import '../main.dart';
 
 class HomePage extends ConsumerWidget {
@@ -25,7 +26,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.16+17 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.17+18 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -102,7 +103,7 @@ class HomePage extends ConsumerWidget {
                     ),
                     TextButton.icon(
                       icon: const Icon(Icons.receipt_long, size: 18),
-                      label: const Text('蓝牙状态与诊断日志'),
+                      label: const Text('录音卡设置与诊断'),
                       onPressed: () => showModalBottomSheet<void>(
                         context: context, isScrollControlled: true,
                         builder: (_) => const BleDiagnosticsSheet(),
@@ -392,7 +393,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('蓝牙诊断 · 1.0.16+17', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.17+18', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -405,7 +406,10 @@ class BleDiagnosticsSheet extends ConsumerWidget {
               const SizedBox(height: 8),
               const Text('日志包含设备标识、GATT 与系统错误，不包含密钥或通知正文。', style: TextStyle(fontSize: 12, color: Colors.grey)),
               const Divider(),
-              Expanded(child: SingleChildScrollView(child: SelectableText(notifier.diagnosticText, style: const TextStyle(fontFamily: 'monospace', fontSize: 11)))),
+              Expanded(child: SingleChildScrollView(child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                RecorderDeviceStatusPanel(details: notifier.bleConnectionDetails),
+                ExpansionTile(tilePadding: EdgeInsets.zero, title: const Text('完整诊断日志'), children: [SelectableText(notifier.diagnosticText, style: const TextStyle(fontFamily: 'monospace', fontSize: 11))]),
+              ]))),
               TextButton.icon(
                 onPressed: () => showModalBottomSheet(
                   context: context, isScrollControlled: true,
@@ -494,6 +498,42 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     super.dispose();
   }
 
+  Widget _deviceSettings(DeviceNotifier notifier) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      ExpansionTile(
+        title: const Text('设备资料与连接方式', style: TextStyle(fontSize: 14)),
+        subtitle: Text(notifier.requiresAncs ? '录音并请求 iPhone 通知' : '仅录音连接',
+            style: const TextStyle(fontSize: 12)),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        children: [
+          RecorderAccountDeviceInfo(device: _selectedAccountDevice!),
+          if (notifier.supportsAncsRequestConfiguration)
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('请求 iPhone 通知服务'),
+              subtitle: const Text('关闭可对照仅录音连接，业务身份验证仍保留'),
+              value: notifier.requiresAncs,
+              onChanged: _isConnecting || notifier.isBleConnecting || notifier.isBleLinkConnected
+                  ? null : (value) async {
+                    await notifier.configureBleAncsRequest(value);
+                    if (mounted) setState(() {});
+                  },
+            ),
+          const Text('先断开其它手机的蓝牙连接。已有系统配对时可能不再弹窗；不要因连接失败而解绑或重置卡片。', style: TextStyle(fontSize: 12)),
+        ],
+      ),
+      if (_connectionError != null) ...[
+        Padding(padding: const EdgeInsets.all(12), child: Text(_connectionError!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error))),
+        TextButton.icon(icon: const Icon(Icons.receipt_long, size: 18),
+          label: const Text('查看并复制完整诊断日志'),
+          onPressed: () => showModalBottomSheet<void>(context: context,
+              isScrollControlled: true, builder: (_) => const BleDiagnosticsSheet())),
+      ],
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final devNotifier = ref.read(deviceProvider.notifier);
@@ -542,11 +582,11 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("搜索蓝牙录音卡设备",
+                    const Text("录音卡连接设置",
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
                     Text('账号 SN：${_selectedAccountDevice!.serialNumber}',
-                        style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                   ],
                 )),
                 Row(
@@ -592,81 +632,6 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
             ),
           ),
 
-          // 连接错误与诊断日志卡片
-          if (_connectionError != null) ...[
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.red.shade300),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.error_outline, color: Colors.red.shade700, size: 20),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          _connectionError!,
-                          style: TextStyle(fontSize: 12, color: Colors.red.shade900, height: 1.3),
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _startScan,
-                        child: const Text("重试", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      ),
-                    ],
-                  ),
-                  if (devNotifier.connectionLogs.isNotEmpty) ...[
-                    const Divider(height: 12),
-                    TextButton.icon(
-                      icon: const Icon(Icons.receipt_long, size: 16),
-                      label: const Text('查看并复制完整诊断日志'),
-                      onPressed: () => showModalBottomSheet<void>(
-                        context: context, isScrollControlled: true,
-                        builder: (_) => const BleDiagnosticsSheet(),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-
-          // 纯净直连与硬件解绑指引横幅
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF8E1),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFFFE082)),
-            ),
-            child: const Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.lightbulb_outline, size: 18, color: Color(0xFFF57F17)),
-                    SizedBox(width: 6),
-                    Text(
-                      "关键指引：若录音卡曾在官方 App 绑定过",
-                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFF57F17)),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 4),
-                Text(
-                  "连接时请处理 iOS 的配对及通知授权。已有系统配对时可能不会重复弹窗。\n若显示业务待鉴权，请复制诊断日志；不要仅因断开就恢复出厂或清除官方绑定。",
-                  style: TextStyle(fontSize: 11, color: Color(0xFF5D4037), height: 1.4),
-                ),
-              ],
-            ),
-          ),
           const Divider(height: 1),
 
           // 主体内容：正在连接提示 (带实时诊断日志) vs 扫描设备列表
@@ -678,6 +643,8 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          _deviceSettings(devNotifier),
+                          const SizedBox(height: 16),
                           // 若日志中已经出现成功握手，显示大号绿勾，否则显示转圈
                           ref.watch(deviceProvider).isConnected
                               ? const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 52)
@@ -695,40 +662,11 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                           const SizedBox(height: 12),
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: Colors.grey.shade100,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: Colors.grey.shade300),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text("实时交互握手状态：",
-                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.grey)),
-                                const SizedBox(height: 6),
-                                ...(devNotifier.connectionLogs.isEmpty
-                                        ? ["正在独占蓝牙通道并发起连接..."]
-                                        : devNotifier.connectionLogs)
-                                    .map((log) => Padding(
-                                          padding: const EdgeInsets.symmetric(vertical: 2),
-                                          child: Text(
-                                            log,
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontFamily: 'monospace',
-                                              color: log.startsWith("✓")
-                                                  ? Colors.green.shade800
-                                                  : (log.startsWith("✗")
-                                                      ? Colors.red.shade800
-                                                      : const Color(0xFF333333)),
-                                            ),
-                                          ),
-                                        )),
-                              ],
-                            ),
+                          RecorderDeviceStatusPanel(details: devNotifier.bleConnectionDetails),
+                          ExpansionTile(
+                            title: const Text('本次连接日志'),
+                            children: [SelectableText(devNotifier.connectionLogs.join('\n'),
+                                style: const TextStyle(fontSize: 11, fontFamily: 'monospace'))],
                           ),
                           const SizedBox(height: 16),
                           // 操作按钮组：完成进入主界面 或 取消连接
@@ -785,8 +723,9 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                       }).toList();
 
                       if (validResults.isEmpty) {
-                        return Center(
-                          child: Padding(
+                        return ListView(children: [
+                          _deviceSettings(devNotifier),
+                          Padding(
                             padding: const EdgeInsets.all(24),
                             child: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -814,7 +753,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                               ],
                             ),
                           ),
-                        );
+                        ]);
                       }
 
                       // 2. 智能排序：推荐录音卡置顶 (支持 C·ONE-4552, AiNote 等)，其余按信号由强到弱排序
@@ -832,10 +771,11 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
 
                       return ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        itemCount: validResults.length,
+                        itemCount: validResults.length + 1,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
-                          final item = validResults[index];
+                          if (index == 0) return _deviceSettings(devNotifier);
+                          final item = validResults[index - 1];
                           final name = item.device.platformName.isNotEmpty
                               ? item.device.platformName
                               : item.advertisementData.advName;
@@ -874,7 +814,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                                   ),
                               ],
                             ),
-                            subtitle: Text("信号: ${item.rssi} dBm · ID: ${item.device.remoteId.str}",
+                            subtitle: Text("信号: ${item.rssi} dBm · 广播${item.advertisementData.connectable ? '可连接' : '未标为可连接'}\nID: ${item.device.remoteId.str}",
                                 style: const TextStyle(fontSize: 11, color: Colors.grey)),
                             trailing: ElevatedButton(
                               style: ElevatedButton.styleFrom(

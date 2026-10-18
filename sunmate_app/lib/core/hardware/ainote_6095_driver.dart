@@ -6,6 +6,7 @@ import '../ble/ble_constants.dart';
 import '../ble/ble_json_rpc.dart';
 import '../ble/ble_protocol.dart';
 import '../ble/ios_ble_connection.dart';
+import '../ble/recorder_connection_details.dart';
 import '../ble/recorder_authentication.dart';
 import '../ble/yoooclaw_account.dart';
 import '../audio/opus_stream_receiver.dart';
@@ -26,6 +27,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final Duration cancellationTimeout;
   RecorderAuthentication? _authentication;
   RecorderAccountSession? _activeAccountSession;
+  int? _nativePeripheralState;
+  bool? _systemConnectedMatch;
+  bool? _advertisementConnectable;
   Future<void> _eventWork = Future.value();
   bool _hasSharedKey = false;
   bool _hasVerifiedDevice = false;
@@ -110,6 +114,21 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool get hasVerifiedDevice => _hasVerifiedDevice;
   bool get supportsAncsRequestConfiguration => _ios.isSupported;
   bool? get ancsAuthorized => _ancsAuthorized;
+  RecorderConnectionDetails get connectionDetails => RecorderConnectionDetails(
+        linkConnected: isLinkConnected,
+        gattDiscovered: _profile != null,
+        identityVerified: _identityVerified,
+        authenticationStarted: _sawAuthenticationEvent,
+        channelsReady: _channelsReady,
+        businessReady: _isConnected,
+        localIdentityLoaded: _hasSharedKey,
+        nativeState: _nativePeripheralState,
+        systemConnectedMatch: _systemConnectedMatch,
+        advertisementConnectable: _advertisementConnectable,
+        requiresAncs: _requiresAncs,
+        ancsAuthorized: _ancsAuthorized,
+        protocol: _profile?.protocol.name ?? '未识别',
+      );
   String get connectionSummary => _phase;
   @override
   int get batteryLevel => _batteryLevel;
@@ -127,12 +146,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.16+17',
+        'SunMate 1.0.17+18',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备上报 SN: $_serialNumber',
         '协议: ${_profile?.protocol.name ?? "未识别"}',
-        '链路: $isLinkConnected; 业务就绪: $_isConnected; ANCS: ${_ancsAuthorized ?? "未知"}',
+        '链路: $isLinkConnected; 业务就绪: $_isConnected; 通知授权属性: ${_ancsAuthorized ?? "未知"}',
+        '原生状态: ${connectionDetails.nativeStateLabel}; 系统已连接服务匹配: ${_systemConnectedMatch ?? "未查询"}; 广播可连接: ${_advertisementConnectable ?? "未知"}',
         ..._connectionLogs,
       ].join('\n');
 
@@ -251,6 +271,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _isConnected = false;
       _channelsReady = false;
       _identityVerified = false;
+      _hasSharedKey = false;
       _sawAuthenticationEvent = false;
       _needsIdentityReconnect = false;
       _activeAccountSession = accountSession;
@@ -259,6 +280,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _voiceSession = null;
       _audioReceiver.cancel();
       _ancsAuthorized = null;
+      _nativePeripheralState = null;
+      _systemConnectedMatch = null;
+      _advertisementConnectable = null;
       _serialNumber = _reportedSerials[device.remoteId.str] ?? '--';
       _batteryLevel = 0;
       _phase = '准备连接';
@@ -278,7 +302,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       for (final result in FlutterBluePlus.lastScanResults
           .where((r) => r.device.remoteId == device.remoteId)) {
         final adv = result.advertisementData;
+        _advertisementConnectable = adv.connectable;
         _log('广播 name=${adv.advName} services=${adv.serviceUuids} '
+            'connectable=${adv.connectable} rssi=${result.rssi} scanAgeMs=${DateTime.now().difference(result.timeStamp).inMilliseconds} '
             'manufacturer=${adv.manufacturerData.map((k, v) => MapEntry(k, v.map((b) => b.toRadixString(16).padLeft(2, "0")).join()))}');
       }
       await FlutterBluePlus.adapterState
@@ -509,7 +535,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     if (_ready != null && !_ready!.isCompleted) _ready!.complete(ready);
   }
 
-  void _handleNativeEvent(Map<String, dynamic> event) {
+  void _handleNativeEvent(Map<String, dynamic> event, {bool snapshot = false}) {
+    if (event['state'] is int) _nativePeripheralState = event['state'] as int;
+    if (event['system_connected_match'] is bool) {
+      _systemConnectedMatch = event['system_connected_match'] as bool;
+    }
     if (event['ancs_authorized'] is bool)
       _ancsAuthorized = event['ancs_authorized'] as bool;
     const states = {
@@ -519,7 +549,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       3: 'disconnecting'
     };
     _log(
-        'iOS event=${event["event"]} state=${states[event["state"]] ?? "unknown"} nativeTime=${event["timestamp_ms"]} '
+        'iOS ${snapshot ? "snapshot lastEvent" : "event"}=${event["event"]} state=${states[event["state"]] ?? "unknown"} nativeTime=${event["timestamp_ms"]} '
+        'central=${event["central_state"]} systemConnectedMatch=${event["system_connected_match"]} pending=${event["connection_pending"]} '
         'ANCS=${event["ancs_authorized"]} domain=${event["error_domain"]} '
         'code=${event["error_code"]} description=${event["error_description"]}');
   }
@@ -529,7 +560,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     if (!_ios.isSupported) return;
     try {
       final snapshot = await _ios.diagnostics(device.remoteId.str);
-      if (generation == _generation && !_disposed) _handleNativeEvent(snapshot);
+      if (generation == _generation && !_disposed)
+        _handleNativeEvent(snapshot, snapshot: true);
     } catch (error) {
       if (generation == _generation) _log('读取原生诊断失败: $error');
     }
