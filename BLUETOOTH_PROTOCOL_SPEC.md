@@ -50,9 +50,11 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 厂商 `verifyRequest` 路径将 encrypted/mac/sn 提交至官方 `/api/device/toc/externalDeviceBind/check`，使用返回的 hmac 构造 verifyResult，并交换 32 字节原始 X25519 公钥。共享密钥直接取 X25519 结果，无已观察到的 HKDF。`verifyIdentityRequest.params.random` 先 Base64 解码，用共享密钥做 AES-256-CBC、16 字节全零 IV、PKCS7 填充，再将密文 Base64 放入 verifyIdentity.params.encrypted；Telink 不附 timestamp。
 
-官方账号的设备列表存在 extInfo.sharedSecret 恢复代码路径。官网渠道 6 的真实登录成功后访问设备列表仍为 401；2026-10-18 用户通过 App 同源渠道 3 正常验证码登录，profile 与设备列表均已返回 200 / 000000。1.0.15+16 据此切换到已验证的 App 登录/短信契约。当时唯一匹配目标 SN 的记录 extInfo 为对象，但没有 sharedSecret 字段。用户随后通过 Android 官方 App 正常连卡并收到按键响应；还没有新的账号查询证明密钥已上传，不能复用旧查询声称已恢复。恢复材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
+官方账号的设备列表存在 extInfo.sharedSecret 恢复代码路径。官网渠道 6 的真实登录成功后访问设备列表仍为 401；2026-10-18 用户通过 App 同源渠道 3 正常验证码登录，profile 与设备列表均已返回 200 / 000000。1.0.15+16 据此切换到已验证的 App 登录/短信契约。当时唯一匹配目标 SN 的记录 extInfo 为对象，但没有 sharedSecret 字段。用户随后通过 Android 官方 App 正常连卡并收到按键响应；后续1.0.17+18账号设备页也由用户确认「账号未返回共享密钥」，因此当前仍不能声称已恢复。恢复材料必须与实际卡上报的 SN 和已发现的协议匹配，随后存入安全存储并由设备挑战验证；已有不同密钥不自动覆盖。没有真实材料时明确失败，不发送假 token、假签名或伪造 user_id。纯本地首次绑定尚未证实。
 
 1.0.16+17 改为先登录、选择自有账号设备，再扫描连接；收到实际首次挑战后才调用 /check。pairingResult 成功后安全保存 X25519 结果，并调用 /api/device/toc/externalDeviceBind/bind，正文为 deviceId=SN、deviceName、extInfo(mac, sharedSecret, 可选的账号既有 uuid)。官方代码先保存本机再同步账号；本版在同步成功后仅自动重连一次，验证新的 AES 身份挑战后才就绪。/check、/bind 本账号真实服务接受结果仍待手机验证。若已有合法旧密钥且设备请求重连身份验证，则不执行新协商。
+
+1.0.18+19 补齐官方 Telink 无本地密钥分支：事件/音频通道就绪后发送一次正常 bindRequest。订阅瞬间先收到 verifyIdentityRequest 而无 key，不伪造 AES 答复；有真实验机会话时继续等正常 verifyRequest。提前身份挑战不能代替厂商挑战，也不能抑制 bindRequest；已经收到厂商挑战则不重复绑定。已有本机密钥或账号恢复成功则沿用挑战验证，不重新协商。设备拒绝即停止，不发送解绑或重置；鉴权等待使用共享120秒界限。本分支已有离线回归，真实卡片是否接受仍待测试。
 
 1.0.13+14 用户已确认验证码登录成功、设备列表请求被拒；该版移除 Bearer 后直接发送裸 Token 的实现存在格式缺口。设备接口公开的未认证响应声明 `WWW-Authenticate: Bearer`，1.0.14+15 因此按 `Authorization: Bearer <登录所得 Token>` 发送且只保留一个前缀。APK 的 `Raw` 表示保留已有格式，不等于要求裸 JWT。请求诊断区分步骤、HTTP 401/403 和数字业务码，不再把所有拒绝归为“没有权限”；仅加 Bearer 未解决官网渠道问题，App 同源登录已由后续真实结果验证。
 
@@ -66,4 +68,4 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HCI 证据，不把数秒断开定性为 MCU 鉴权看门狗、固件 JSON 崩溃或对端主动断开。
 
-最新登录优先、真实验机与系统连接等待的验收步骤见 [1.0.16 手机测试说明](docs/IOS_BLE_TEST_1.0.16.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。
+最新无密钥分支的依据及验收步骤见 [1.0.18 手机测试说明](docs/IOS_BLE_TEST_1.0.18.md)，原生授权排查另见 [1.0.11 手机测试说明](docs/IOS_BLE_TEST_1.0.11.md)。

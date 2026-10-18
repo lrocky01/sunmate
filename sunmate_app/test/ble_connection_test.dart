@@ -32,6 +32,9 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   Object replySuccess = false;
   bool authenticate = false;
   bool firstBinding = false;
+  bool identityOnSubscribe = false;
+  bool requiresBindRequest = false;
+  bool rejectBindRequest = false;
   Uint8List? peerSecret;
   String? reportedSn;
 
@@ -135,6 +138,17 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
 
   @override
   Future<bool> setNotifyValue(BmSetNotifyValueRequest request) async {
+    if (identityOnSubscribe &&
+        !rejectNotify &&
+        request.characteristicUuid.str == BleConstants.charDeviceEvent) {
+      event(request.remoteId, {
+        'method': 'verifyIdentityRequest',
+        'params': {
+          if (reportedSn != null) 'sn': reportedSn,
+          'random': base64Encode(List.generate(32, (i) => i)),
+        }
+      });
+    }
     descriptors.add(BmDescriptorData(
         remoteId: request.remoteId,
         primaryServiceUuid: request.primaryServiceUuid,
@@ -162,6 +176,11 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
         success: true,
         errorCode: 0,
         errorString: ''));
+    if (request.value.length == 6 &&
+        request.value[0] == 0x11 &&
+        request.value[1] == 0x29) {
+      return true; // Official Telink RTC frame, independent of the JSON RPC channel.
+    }
     final method = jsonDecode(utf8.decode(request.value.sublist(2)))['method'];
     if (firstBinding) return firstBindReply(request, method);
     if (method == 'getStatus' || (authenticate && method == 'verifyIdentity')) {
@@ -201,7 +220,15 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
 
   Future<bool> firstBindReply(
       BmWriteCharacteristicRequest request, String method) async {
-    if (method == 'getStatus' && connectCount == 1) {
+    if (method == 'bindRequest' && rejectBindRequest) {
+      event(request.remoteId, {
+        'method': 'bindError',
+        'params': {'success': false}
+      });
+    } else if (connectCount == 1 &&
+        (requiresBindRequest
+            ? method == 'bindRequest'
+            : method == 'getStatus')) {
       event(request.remoteId, {
         'method': 'verifyRequest',
         'params': {
@@ -268,6 +295,9 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
     writes.clear();
     authenticate = false;
     firstBinding = false;
+    identityOnSubscribe = false;
+    requiresBindRequest = false;
+    rejectBindRequest = false;
     peerSecret = null;
     reportedSn = null;
     connectCount = 0;
@@ -295,7 +325,7 @@ void main() {
     platform.reset();
     device = BluetoothDevice.fromId(
         '00000000-0000-0000-0000-${(++sequence).toString().padLeft(12, "0")}');
-    driver = AiNote6095Driver();
+    driver = AiNote6095Driver(authenticationTimeout: const Duration(seconds: 2));
   });
   tearDown(() async {
     await driver.dispose();
@@ -391,8 +421,10 @@ void main() {
     final keys = MemoryKeyStore()..value = base64Encode(shared);
     driver = AiNote6095Driver(keyStore: keys);
     platform.authenticate = true;
+    platform.identityOnSubscribe = true;
     expect(await driver.connectDevice(device), true);
     final methods = platform.writes
+        .where((w) => w.value.length > 2 && w.value[1] == 0x30)
         .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method']);
     expect(methods, contains('verifyIdentity'));
     expect(methods, isNot(contains('bindRequest')));
@@ -554,6 +586,135 @@ void main() {
     await driver.disconnect();
     expect(await result, false);
     expect(platform.connectCount, 0);
+  });
+
+  test(
+      'early identity challenge without local or cloud key must still send one legitimate bind request',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.firstBinding = true;
+    platform.identityOnSubscribe = true;
+    platform.requiresBindRequest = true;
+    var checks = 0, commits = 0;
+    final session = RecorderAccountSession('AB00000000000001', (
+        {required checkContent, required mac, required sn}) async {
+      checks++;
+      return 'test-only-issued-hmac';
+    }, ({required sn, required mac, required sharedSecret}) async {
+      commits++;
+    }, restoreKey: (id, protocol, sn, store) async => false);
+    expect(await driver.connectDevice(device, accountSession: session), true);
+    final methods = platform.writes
+        .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+        .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method'])
+        .toList();
+    expect(methods.where((m) => m == 'bindRequest'), hasLength(1));
+    expect(methods,
+        containsAllInOrder(['bindRequest', 'verifyResult', 'verifyIdentity']));
+    expect(methods, isNot(contains('unbindRequest')));
+    expect(platform.connectCount, 2);
+    expect(checks, 1);
+    expect(commits, 1);
+    expect(keys.writes, 1);
+    expect(driver.diagnosticText, isNot(contains(keys.value!)));
+  });
+
+  test('delayed account restore during CCCD does not race into a new binding',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.authenticate = true;
+    platform.identityOnSubscribe = true;
+    platform.reportedSn = 'AB00000000000001';
+    final entered = Completer<void>(), pending = Completer<void>();
+    final audioReady =
+        driver.logStream.firstWhere((s) => s.contains('音频 CCCD 已确认'));
+    final session = RecorderAccountSession(
+        'AB00000000000001',
+        ({required checkContent, required mac, required sn}) async =>
+            throw StateError('No manufacturer request expected'),
+        ({required sn, required mac, required sharedSecret}) async =>
+            throw StateError('No new binding expected'),
+        restoreKey: (id, protocol, sn, store) async {
+      entered.complete();
+      await pending.future;
+      await store.write(id, protocol, base64Encode(shared));
+      return true;
+    });
+    final result = driver.connectDevice(device, accountSession: session);
+    await entered.future;
+    await audioReady;
+    expect(platform.writes, isEmpty);
+    pending.complete();
+    expect(await result, true);
+    expect(platform.connectCount, 1);
+    expect(keys.writes, 1);
+    expect(
+        platform.writes
+            .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+            .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method']),
+        isNot(contains('bindRequest')));
+  });
+
+  test(
+      'cancel exits pending account restoration without sending a binding request',
+      () async {
+    await driver.dispose();
+    driver = AiNote6095Driver(keyStore: MemoryKeyStore());
+    platform.authenticate = true;
+    platform.identityOnSubscribe = true;
+    platform.reportedSn = 'AB00000000000001';
+    final entered = Completer<void>(), pending = Completer<void>();
+    final session = RecorderAccountSession(
+        'AB00000000000001',
+        ({required checkContent, required mac, required sn}) async => '',
+        ({required sn, required mac, required sharedSecret}) async {},
+        restoreKey: (id, protocol, sn, store) async {
+      entered.complete();
+      await pending.future;
+      return false;
+    });
+    final result = driver.connectDevice(device, accountSession: session);
+    await entered.future;
+    await driver.disconnect();
+    expect(await result.timeout(const Duration(seconds: 1)), false);
+    pending.complete();
+    await Future<void>.delayed(Duration.zero);
+    expect(platform.writes, isEmpty);
+    expect(platform.connectCount, 1);
+  });
+
+  test(
+      'device rejection of the normal bind request stops without retry or key changes',
+      () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.firstBinding = true;
+    platform.identityOnSubscribe = true;
+    platform.requiresBindRequest = true;
+    platform.rejectBindRequest = true;
+    final session = RecorderAccountSession(
+        'AB00000000000001',
+        ({required checkContent, required mac, required sn}) async =>
+            throw StateError('No challenge was issued'),
+        ({required sn, required mac, required sharedSecret}) async =>
+            throw StateError('No pairing happened'));
+    expect(await driver.connectDevice(device, accountSession: session), false);
+    final methods = platform.writes
+        .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+        .map((w) => jsonDecode(utf8.decode(w.value.sublist(2)))['method'])
+        .toList();
+    expect(methods.where((m) => m == 'bindRequest'), hasLength(1));
+    expect(methods, isNot(contains('verifyIdentity')));
+    expect(methods, isNot(contains('verifyResult')));
+    expect(methods, isNot(contains('unbindRequest')));
+    expect(keys.writes, 0);
+    expect(platform.connectCount, 1);
+    expect(driver.lastErrorMessage, contains('bindError'));
   });
 
   test(

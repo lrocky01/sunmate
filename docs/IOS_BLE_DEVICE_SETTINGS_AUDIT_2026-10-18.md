@@ -6,9 +6,11 @@
 
 随后用户补充：**同一台 iPhone 的官方 App 也连不上**。因此本轮现象不只发生在 SunMate；当前排查优先级转为 iPhone 与卡片的系统连接/配对状态，不再把补登录字段当作已确定的解决办法。旧 bond、卡片切换主机后的状态等仍是候选原因，尚无 HCI 或明确设备错误予以证实。已请求只读查看 iPhone 蓝牙列表归属和状态，不要求忽略设备或解绑。
 
+后续进展：用户在找不到普通重启方式后，自行点击「解绑」，再进入 iPhone 新设备绑定页选择卡片，出现系统配对框并连接成功。该结果证明这台 iPhone 与卡片可以成功配对，先前官方连接失败不是永久不兼容的证据；解绑的具体层级未独立核实，不能单独证明是哪种记录冲突或账号返回了新共享密钥。接下来保留本次成功绑定，退出官方 App 后用 SunMate 1.0.17+18 验证是否进入 GATT 和完成真实挑战；无需再次解绑。
+
 SunMate 1.0.16+17 的明确日志为：11:20:09 发出 connect_requested，CBPeripheral=connecting；随后 90 秒没有 connected/GATT，App 截止后发 cancel_requested，系统返回 disconnected、error=nil。每 10 秒重复的 nativeTime 是读取最后事件快照，不是重复 connect。用户反馈「仅录音连接」仍失败，但尚未提供显示 RequiresANCS=false 的该次完整日志，不能当作已观测到的精确状态。
 
-**当前先卡在 iOS 系统连接。账号信息缺少共享密钥可能阻塞后续业务验证，但目前没有证据表明它造成这次 GATT 前的 pending。**
+**以上为旧 pending 阶段。最新1.0.17+18日志已收到 connected、完整 Telink GATT 和订阅瞬间的 verifyIdentityRequest；当前进入业务鉴权排查。账号页新反馈仍为「账号未返回共享密钥」。**
 
 ## 三类资料不能混淆
 
@@ -77,3 +79,9 @@ SunMate 1.0.16+17 的明确日志为：11:20:09 发出 connect_requested，CBPer
 关闭 Android 蓝牙后，先测试同一台 iPhone 的官方 App 能否保持一分钟并响应按键；若提示解绑/重置则停止。若官方也失败，先调查 iPhone/卡片系统连接；若官方成功，再退出官方 App，用 SunMate 对照新原生快照。保留 RequiresANCS=false 的完整失败日志。只有进入 GATT 后，才用新的账号资料状态和实际 /check /bind /AES 回执判断业务材料是否缺失。
 
 本次官方 iPhone 对照已反馈失败，接着查看「设置→蓝牙」的目标卡是否在我的设备/其它设备、是否已连接。可先按原厂正常方法关机再开机、确认 App 蓝牙权限；Apple 的常规排查也先列出这些步骤。[Apple 支持](https://support.apple.com/zh-cn/111804)。不根据猜测要求恢复出厂或清除 Android 的现有成功绑定。
+
+## 后续确认：业务鉴权提前失败
+
+1.0.17+18 的15:17日志显示624ms connected、1491ms GATT完成、1549ms身份挑战，本机无key且设备未在挑战中上报SN。SunMate立即报失败，随后仍下发查询并主动断开。这里没有证据表明是固件看门狗踢掉链路，ANCS=false也没有阻止GATT建立。
+
+重新核对官方 transport-ready 和身份挑战分支后，确认无本地key时官方会继续发一次正常bindRequest，不能用早到的identity事件抑制它。1.0.18+19修复该分支，并避免慢账号恢复期间误发新绑定；详见 [本版证据与手机步骤](IOS_BLE_TEST_1.0.18.md)。APK未发现额外正常读取完整密钥的接口；这不是证明服务器绝无其它实现，也不等于必须SDK授权。

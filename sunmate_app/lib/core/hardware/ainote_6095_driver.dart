@@ -25,6 +25,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final ManufacturerVerifier? _verifier;
   final Duration connectionTimeout;
   final Duration cancellationTimeout;
+  final Duration authenticationTimeout;
   RecorderAuthentication? _authentication;
   RecorderAccountSession? _activeAccountSession;
   int? _nativePeripheralState;
@@ -36,6 +37,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool _channelsReady = false;
   bool _identityVerified = false;
   bool _sawAuthenticationEvent = false;
+  bool _sawManufacturerChallenge = false;
   bool _restoringIdentity = false;
   bool _needsIdentityReconnect = false;
   bool _cancelReconnect = false;
@@ -82,6 +84,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     ManufacturerVerifier? verifier,
     this.connectionTimeout = const Duration(seconds: 90),
     this.cancellationTimeout = const Duration(seconds: 5),
+    this.authenticationTimeout = const Duration(seconds: 120),
   })  : _keyStore = keyStore ?? SecureRecorderKeyStore(),
         _verifier = verifier {
     _initialization = _loadPreferences();
@@ -146,7 +149,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.17+18',
+        'SunMate 1.0.18+19',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备上报 SN: $_serialNumber',
@@ -273,6 +276,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _identityVerified = false;
       _hasSharedKey = false;
       _sawAuthenticationEvent = false;
+      _sawManufacturerChallenge = false;
       _needsIdentityReconnect = false;
       _activeAccountSession = accountSession;
       _authentication?.cancel();
@@ -443,6 +447,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _log(
           '识别 ${profile.protocol.name}；命令=${profile.command} withoutResponse=${profile.withoutResponse}；MTU=${device.mtuNow}；OTA 排除');
       _phase = '订阅设备事件';
+      final authenticationClock = Stopwatch()..start();
+      Duration remainingAuthenticationTime() {
+        final remaining = authenticationTimeout - authenticationClock.elapsed;
+        return remaining.isNegative ? Duration.zero : remaining;
+      }
+
       // 先监听再启用 CCCD，避免遗漏订阅瞬间的身份挑战。
       _subscriptions.add(event.onValueReceived.listen((bytes) {
         if (generation == _generation) _handleEvent(bytes);
@@ -465,19 +475,26 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _checkGeneration(generation);
       _log('音频 CCCD 已确认');
       _channelsReady = true;
+      // 订阅瞬间可能已收到身份挑战。先处理它，避免在恢复账号密钥时误发新绑定，
+      // 也避免在已知鉴权失败后继续发送初始化命令。取消不能被迟到结果阻塞。
+      await Future.any<void>([
+        _eventWork,
+        cancellation.future.then<void>((_) => throw StateError('连接已取消')),
+      ]).timeout(remainingAuthenticationTime());
+      _checkGeneration(generation);
+      if (_ready!.isCompleted && !_isConnected) return false;
       _completeAuthenticatedConnection();
       if (_isConnected) {
         _phase = '设备业务已验证';
       } else if (!_sawAuthenticationEvent) {
         _phase = '业务待鉴权';
       }
-      // 仅发送已确认的能力/状态查询，不能把写入队列成功当设备验证成功。
-      await _sendJson(BleJsonRpc.getCapabilities(), 'getCapabilities');
-      _checkGeneration(generation);
       if (!_ready!.isCompleted) {
         if (profile.protocol == RecorderProtocol.telink &&
             !_hasSharedKey &&
-            !_sawAuthenticationEvent) {
+            !_sawManufacturerChallenge) {
+          _phase = '等待真实首次验机';
+          _log('本机尚无可用密钥；通道已就绪，按官方流程发送一次正常绑定请求');
           await _sendJson(
               BleJsonRpc.bindRequest(
                   DateTime.now().millisecondsSinceEpoch ~/ 1000),
@@ -487,10 +504,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           _log('AiNote6095 首次业务绑定需要合法 user_id 和验证材料；本版不伪造');
         }
       }
+      // 写入完成不等于业务验证成功；仍需本轮设备身份挑战。
+      _checkGeneration(generation);
+      if (_ready!.isCompleted && !_isConnected) return false;
+      await _sendJson(BleJsonRpc.getCapabilities(), 'getCapabilities');
       _checkGeneration(generation);
       await _sendJson(BleJsonRpc.getStatus(), 'getStatus');
       final ready = await _ready!.future
-          .timeout(const Duration(seconds: 12), onTimeout: () => false);
+          .timeout(remainingAuthenticationTime(), onTimeout: () => false);
       _checkGeneration(generation);
       if (!ready) {
         if (isLinkConnected) {
@@ -601,6 +622,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (method == 'verifyRequest' || method == 'verifyIdentityRequest') {
         _sawAuthenticationEvent = true;
       }
+      if (method == 'verifyRequest') _sawManufacturerChallenge = true;
       final safeMethod =
           RegExp(r'^[A-Za-z0-9_]{1,64}$').hasMatch(method) ? method : '未知方法';
       final params = message['params'] is Map
@@ -661,6 +683,20 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           _checkGeneration(generation);
           _log('已恢复与实际 SN 和协议匹配的账号密钥；仍需本次挑战验证');
         }
+      }
+      if (!_hasSharedKey) {
+        if (_profile?.protocol == RecorderProtocol.telink &&
+            _authentication?.verifier != null) {
+          _phase = '等待真实首次验机';
+          _log('已有身份挑战需要共享密钥；当前未取得可用密钥，未伪造应答，继续正常首次绑定流程');
+          return;
+        }
+        _phase = '业务鉴权未完成';
+        lastErrorMessage = '本机没有可用共享密钥，且当前没有可执行真实首次验机的账号会话；请登录自己的官方账号';
+        _log(lastErrorMessage!);
+        _authentication?.cancel();
+        _finishWaiting(false);
+        return;
       }
       final reply = await _authentication!.answerIdentity(params,
           timestampSeconds: DateTime.now().millisecondsSinceEpoch ~/ 1000);
@@ -877,7 +913,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _authentication?.cancel();
     _cancelVoice();
     _finishWaiting(false);
-    _phase = reconnecting ? '重连验证共享密钥' : '用户取消连接';
+    _phase = reconnecting ? '重连验证共享密钥' : 'App 请求断开连接';
     _log('已请求断开；不会清除系统 bond 或恢复出厂');
     final device = _device;
     var acknowledged = true;
