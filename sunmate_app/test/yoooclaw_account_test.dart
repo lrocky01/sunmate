@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sunmate_app/core/ble/ble_protocol.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
+import 'package:sunmate_app/core/ble/official_account_session_store.dart';
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 // All requests terminate in memory; no SMS or vendor calls occur in these tests.
@@ -20,6 +21,28 @@ class AccountHttpAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) {}
+}
+
+class MemoryOfficialSessionStore implements OfficialAccountSessionStore {
+  String? value;
+  bool failRead = false, failWrite = false, failDelete = false;
+  Completer<void>? writeGate;
+  @override
+  Future<String?> read() async {
+    if (failRead) throw StateError('test-only-storage-failure');
+    return value;
+  }
+  @override
+  Future<void> write(String data) async {
+    if (writeGate != null) await writeGate!.future;
+    if (failWrite) throw StateError('test-only-storage-failure');
+    value = data;
+  }
+  @override
+  Future<void> delete() async {
+    if (failDelete) throw StateError('test-only-storage-failure');
+    value = null;
+  }
 }
 
 ResponseBody response(Object body, {int status = 200}) =>
@@ -39,12 +62,25 @@ Map<String, dynamic> record(
         'mac': 'test-only-mac'
       },
     };
+
+RecorderScanIdentity scanIdentity({String remoteId = 'new-recorder',
+    DateTime? observedAt}) {
+  final time = observedAt ?? DateTime.now();
+  return RecorderScanIdentity.fromAdvertisement(
+      remoteId: remoteId,
+      deviceName: 'C·ONE-test',
+      manufacturerData: {0x1c0d: [1, 255, 0x1d, 0x2c, ...ascii.encode('AB00000000000001')]},
+      connectable: true, observedAt: time, now: time)!;
+}
 void main() {
   late AccountHttpAdapter adapter;
   late YoooClawAccount client;
+  late MemoryOfficialSessionStore sessions;
   setUp(() {
     adapter = AccountHttpAdapter();
-    client = YoooClawAccount(http: Dio()..httpClientAdapter = adapter);
+    sessions = MemoryOfficialSessionStore();
+    client = YoooClawAccount(http: Dio()..httpClientAdapter = adapter,
+        sessionStore: sessions);
     adapter.respond = (r) {
       if (r.path.endsWith('/sendLoginSms')) return response({'code': '0'});
       if (r.path.endsWith('/loginOrRegister'))
@@ -64,6 +100,113 @@ void main() {
     };
   });
   tearDown(() => client.close());
+  Future<void> loginWithEmptyDevices() async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (r) => response({
+      'code': '000000', 'data': {'deviceList': []}
+    });
+    await client.loadBindings();
+  }
+
+  test('new recorder with an empty account uses scoped check and bind', () async {
+    await loginWithEmptyDevices();
+    final identity = scanIdentity();
+    final session = client.sessionForNewDevice(identity);
+    expect(session.newDeviceIdentity, same(identity));
+    expect(session.hasRecoverableKey, false);
+    expect(session.restoreKey, isNull);
+    final before = adapter.requests.length;
+    await expectLater(session.committer(sn: identity.serialNumber, mac: 'mac',
+        sharedSecret: base64Encode(shared)), throwsA(isA<OfficialAccountException>()));
+    await expectLater(session.verifier(checkContent: 'challenge', mac: 'mac',
+        sn: 'AB00000000000002'), throwsA(isA<OfficialAccountException>()));
+    expect(adapter.requests.length, before);
+    adapter.respond = (r) => r.path.endsWith('/check')
+        ? response({'code': '000000', 'data': {'hmac': 'test-only-issued-hmac'}})
+        : response({'code': '000000'});
+    await session.verifier(checkContent: 'test-only-fresh-challenge', mac: 'mac',
+        sn: identity.serialNumber);
+    await expectLater(session.committer(sn: identity.serialNumber, mac: 'other-mac',
+        sharedSecret: base64Encode(shared)), throwsA(isA<OfficialAccountException>()));
+    await session.committer(sn: identity.serialNumber, mac: 'mac',
+        sharedSecret: base64Encode(shared));
+    expect(adapter.requests.last.data, {
+      'deviceId': identity.serialNumber, 'deviceName': 'C·ONE-test',
+      'extInfo': {'mac': 'mac', 'sharedSecret': base64Encode(shared)}
+    });
+    expect(adapter.requests.skip(before).map((r) => r.uri.path), [
+      '/api/device/toc/externalDeviceBind/check',
+      '/api/device/toc/externalDeviceBind/bind'
+    ]);
+    expect(client.diagnostics.join('\n'), isNot(contains('test-only-issued-hmac')));
+    expect(client.diagnostics.join('\n'), isNot(contains(base64Encode(shared))));
+  });
+
+  test('new recorder requires login, a loaded list and fresh selection', () async {
+    expect(() => client.sessionForNewDevice(scanIdentity()),
+        throwsA(isA<OfficialAccountException>()));
+    await client.login('13800000000', '1234');
+    expect(() => client.sessionForNewDevice(scanIdentity()),
+        throwsA(isA<OfficialAccountException>()));
+    await loginWithEmptyDevices();
+    expect(() => client.sessionForNewDevice(scanIdentity(
+        observedAt: DateTime.now().subtract(const Duration(minutes: 1)))),
+        throwsA(isA<OfficialAccountException>()));
+  });
+
+  for (final duplicate in [false, true]) {
+    test('new recorder cannot replace listed SN (duplicate=$duplicate)', () async {
+      await client.login('13800000000', '1234');
+      adapter.respond = (_) => response({'code': '000000', 'data': {
+        'deviceList': [record(), if (duplicate) record()]
+      }});
+      await client.loadBindings();
+      final before = adapter.requests.length;
+      expect(() => client.sessionForNewDevice(scanIdentity()),
+          throwsA(isA<OfficialAccountException>()));
+      expect(adapter.requests.length, before);
+    });
+  }
+
+  test('changed account data invalidates an in-flight new-device check', () async {
+    await loginWithEmptyDevices();
+    final session = client.sessionForNewDevice(scanIdentity());
+    final pending = Completer<ResponseBody>();
+    final entered = Completer<void>();
+    adapter.respond = (r) {
+      if (r.path.endsWith('/check')) {
+        entered.complete();
+        return pending.future;
+      }
+      return response({'code': '000000', 'data': {'deviceList': []}});
+    };
+    final check = session.verifier(checkContent: 'challenge', mac: 'mac',
+        sn: session.serialNumber);
+    final rejected = expectLater(check, throwsA(isA<OfficialAccountException>()));
+    await entered.future;
+    await client.loadBindings();
+    pending.complete(response({'code': '000000', 'data': {'hmac': 'test-only-issued-hmac'}}));
+    await rejected;
+    final before = adapter.requests.length;
+    await expectLater(session.committer(sn: session.serialNumber, mac: 'mac',
+        sharedSecret: base64Encode(shared)), throwsA(isA<OfficialAccountException>()));
+    expect(adapter.requests.length, before);
+  });
+
+  test('rejected or closed new-device check cannot authorize cloud binding', () async {
+    await loginWithEmptyDevices();
+    final session = client.sessionForNewDevice(scanIdentity());
+    adapter.respond = (_) => response({'code': '403'}, status: 403);
+    await expectLater(session.verifier(checkContent: 'challenge', mac: 'mac',
+        sn: session.serialNumber), throwsA(isA<OfficialAccountException>()));
+    final before = adapter.requests.length;
+    await expectLater(session.committer(sn: session.serialNumber, mac: 'mac',
+        sharedSecret: base64Encode(shared)), throwsA(isA<OfficialAccountException>()));
+    client.close();
+    await expectLater(session.verifier(checkContent: 'challenge', mac: 'mac',
+        sn: session.serialNumber), throwsA(isA<OfficialAccountException>()));
+    expect(adapter.requests.length, before);
+  });
   test(
       'device material summary distinguishes missing, invalid and supported recovery',
       () {

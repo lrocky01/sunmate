@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
+import '../core/ble/ble_protocol.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
@@ -26,7 +27,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.20+21 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.21+22 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -393,7 +394,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.20+21', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.21+22', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -448,6 +449,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   late final YoooClawAccount _account;
   late final DeviceNotifier _deviceNotifier;
   AccountRecorderDevice? _selectedAccountDevice;
+  bool _addingNewDevice = false;
   bool _isConnecting = false;
   String? _connectingDeviceName;
   String? _connectionError;
@@ -507,7 +509,10 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
             style: const TextStyle(fontSize: 12)),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         children: [
-          RecorderAccountDeviceInfo(device: _selectedAccountDevice!),
+          if (_selectedAccountDevice != null)
+            RecorderAccountDeviceInfo(device: _selectedAccountDevice!)
+          else
+            const Text('选择附近的新录音卡后，验证设备身份并保存绑定。当前首次添加支持 C·ONE（Telink）。'),
           if (notifier.supportsAncsRequestConfiguration)
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
@@ -538,7 +543,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   Widget build(BuildContext context) {
     final devNotifier = ref.read(deviceProvider.notifier);
 
-    if (_selectedAccountDevice == null) {
+    if (_selectedAccountDevice == null && !_addingNewDevice) {
       return Material(color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         clipBehavior: Clip.antiAlias,
@@ -553,6 +558,10 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
         } : null,
         onSelectDevice: (device) {
           setState(() => _selectedAccountDevice = device);
+          _startScan();
+        },
+        onAddDevice: () {
+          setState(() => _addingNewDevice = true);
           _startScan();
         }));
     }
@@ -579,13 +588,25 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
+                IconButton(
+                  tooltip: '返回账号设备',
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: _isConnecting ? null : () {
+                    unawaited(FlutterBluePlus.stopScan());
+                    setState(() {
+                      _addingNewDevice = false;
+                      _selectedAccountDevice = null;
+                      _connectionError = null;
+                    });
+                  },
+                ),
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text("录音卡连接设置",
+                    Text(_addingNewDevice ? '添加新录音卡' : '录音卡连接设置',
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
-                    Text('账号 SN：${_selectedAccountDevice!.serialNumber}',
+                    Text(_addingNewDevice ? '搜索附近卡片并验证身份' : '账号 SN：${_selectedAccountDevice!.serialNumber}',
                         style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                   ],
                 )),
@@ -732,13 +753,19 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                               children: [
                                 Icon(Icons.bluetooth_searching, size: 48, color: Colors.grey.shade400),
                                 const SizedBox(height: 12),
-                                const Text("正在搜索附近的蓝牙录音卡...",
-                                    style: TextStyle(fontWeight: FontWeight.bold)),
+                                Text(_connectionError != null
+                                    ? '暂时无法搜索录音卡'
+                                    : FlutterBluePlus.isScanningNow
+                                        ? '正在搜索附近的蓝牙录音卡...'
+                                        : '没有发现录音卡',
+                                    style: const TextStyle(fontWeight: FontWeight.bold)),
                                 const SizedBox(height: 8),
-                                const Text(
-                                  "提示：\n1. 请确认录音卡处于开机状态；\n2. 若名称包含 C·ONE 或 AiNote，请靠近手机；\n3. 若录音卡刚连接过 Android，请先关闭 Android 蓝牙，再重新扫描；无需解绑或重置。",
+                                Text(
+                                  _addingNewDevice
+                                      ? '请将 C·ONE 开机并靠近手机，断开其它手机的蓝牙连接后重新搜索。'
+                                      : "提示：\n1. 请确认录音卡处于开机状态；\n2. 若名称包含 C·ONE 或 AiNote，请靠近手机；\n3. 若录音卡刚连接过 Android，请先关闭 Android 蓝牙，再重新扫描。",
                                   textAlign: TextAlign.center,
-                                  style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.5),
+                                  style: const TextStyle(fontSize: 12, color: Colors.black54, height: 1.5),
                                 ),
                                 const SizedBox(height: 16),
                                 ElevatedButton.icon(
@@ -814,7 +841,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                                   ),
                               ],
                             ),
-                            subtitle: Text("信号: ${item.rssi} dBm · 广播${item.advertisementData.connectable ? '可连接' : '未标为可连接'}\nID: ${item.device.remoteId.str}",
+                            subtitle: Text("${_addingNewDevice ? 'SN: ${RecorderAdvertisementSerial.telink(item.advertisementData.manufacturerData) ?? '未识别'}\n' : ''}信号: ${item.rssi} dBm · 广播${item.advertisementData.connectable ? '可连接' : '未标为可连接'}\nID: ${item.device.remoteId.str}",
                                 style: const TextStyle(fontSize: 11, color: Colors.grey)),
                             trailing: ElevatedButton(
                               style: ElevatedButton.styleFrom(
@@ -837,8 +864,21 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                                 var ok = false;
                                 String? operationError;
                                 try {
+                                  final identity = RecorderScanIdentity.fromAdvertisement(
+                                      remoteId: item.device.remoteId.str,
+                                      deviceName: name,
+                                      manufacturerData: item.advertisementData.manufacturerData,
+                                      connectable: item.advertisementData.connectable,
+                                      observedAt: item.timeStamp);
+                                  if (_addingNewDevice && identity == null) {
+                                    throw const OfficialAccountException('未取得新鲜且完整的 C·ONE 广播，请重新搜索后选择');
+                                  }
                                   ok = await devNotifier.connectDevice(item.device,
-                                      accountSession: _account.sessionForDevice(_selectedAccountDevice!));
+                                      accountSession: _addingNewDevice
+                                          ? _account.sessionForNewDevice(identity!)
+                                          : _account.sessionForDevice(_selectedAccountDevice!));
+                                } on OfficialAccountException catch (error) {
+                                  operationError = error.message;
                                 } catch (_) {
                                   operationError = '蓝牙操作未完成，请查看并复制诊断日志';
                                 }

@@ -11,12 +11,19 @@ class WidgetAccount extends YoooClawAccount {
   bool loggedIn = false;
   bool closed = false;
   int smsCalls = 0;
+  int listCalls = 0;
   final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
   @override
   List<AccountRecorderDevice> get devices =>
       [AccountRecorderDevice.fromRecord(record())!];
   @override
   bool get isLoggedIn => loggedIn;
+  @override
+  bool get isSessionSaved => loggedIn;
+  @override
+  Future<bool> restoreSession() async => loggedIn;
+  @override
+  Future<void> logout() async { loggedIn = false; }
   @override
   Future<void> sendSms(String phone) async {
     smsCalls++;
@@ -28,7 +35,10 @@ class WidgetAccount extends YoooClawAccount {
   }
 
   @override
-  Future<List<OwnedRecorderBinding>> loadBindings() async => [binding];
+  Future<List<OwnedRecorderBinding>> loadBindings() async {
+    listCalls++;
+    return [binding];
+  }
   @override
   void close() {
     closed = true;
@@ -38,7 +48,81 @@ class WidgetAccount extends YoooClawAccount {
   }
 }
 
+class EmptyWidgetAccount extends WidgetAccount {
+  @override
+  List<AccountRecorderDevice> get devices => [];
+  @override
+  Future<List<OwnedRecorderBinding>> loadBindings() async => [];
+}
+
+class RestoringWidgetAccount extends WidgetAccount {
+  @override
+  Future<bool> restoreSession() async { loggedIn = true; return true; }
+}
+
 void main() {
+  testWidgets('saved login restores and refreshes without SMS; logout shows login', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final account = RestoringWidgetAccount();
+    await tester.pumpWidget(ProviderScope(child: MaterialApp(home: Scaffold(
+        body: RecorderConnectionSheet(account: account)))));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('登录状态已安全保存'), findsOneWidget);
+    expect(account.listCalls, 1);
+    await tester.ensureVisible(find.text('重新读取我的设备'));
+    await tester.tap(find.text('重新读取我的设备'));
+    await tester.pumpAndSettle();
+    expect(account.listCalls, 2);
+    expect(account.smsCalls, 0);
+    await tester.ensureVisible(find.text('退出官方账号'));
+    await tester.tap(find.text('退出官方账号'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(find.text('退出官方账号'), findsNothing);
+    expect(account.smsCalls, 0);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 300));
+  });
+  testWidgets('empty account can add a new recorder after login', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final account = EmptyWidgetAccount();
+    await tester.pumpWidget(ProviderScope(child: MaterialApp(
+        home: Scaffold(body: RecorderConnectionSheet(account: account)))));
+    await tester.pumpAndSettle();
+    expect(find.text('添加新录音卡'), findsNothing);
+    await tester.enterText(find.byType(TextField).at(0), '13800000000');
+    await tester.enterText(find.byType(TextField).at(1), '1234');
+    await tester.ensureVisible(find.text('登录并读取我的设备'));
+    await tester.tap(find.text('登录并读取我的设备'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择并搜索'), findsNothing);
+    await tester.ensureVisible(find.text('添加新录音卡'));
+    await tester.tap(find.text('添加新录音卡'));
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(find.text('添加新录音卡'), findsOneWidget);
+    expect(find.textContaining('账号 SN：'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('返回账号设备'));
+    await tester.pumpAndSettle();
+    expect(find.text('登录并连接录音卡'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('添加新录音卡'), findsOneWidget);
+    expect(account.closed, false);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(account.closed, true);
+  });
   testWidgets(
       'connection entry requires account login before scanning or device SN',
       (tester) async {

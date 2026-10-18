@@ -9,12 +9,14 @@ import 'recorder_device_status.dart';
 class RecorderAccountSheet extends ConsumerStatefulWidget {
   final YoooClawAccount? account;
   final ValueChanged<AccountRecorderDevice>? onSelectDevice;
+  final VoidCallback? onAddDevice;
   final bool closeAccountOnDispose;
   final Future<bool> Function()? onReconnectVerified;
   const RecorderAccountSheet(
       {super.key,
       this.account,
       this.onSelectDevice,
+      this.onAddDevice,
       this.onReconnectVerified,
       this.closeAccountOnDispose = true});
   @override
@@ -37,6 +39,9 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
   void initState() {
     super.initState();
     _account = widget.account ?? YoooClawAccount();
+    unawaited(_run(() async {
+      if (await _account.restoreSession()) await _loadBindings();
+    }));
   }
 
   Future<void> _run(Future<void> Function() action) async {
@@ -52,7 +57,10 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
     } catch (_) {
       if (mounted) setState(() => _status = '操作未完成，请查看蓝牙诊断；未显示账号或密钥内容');
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() {
+        _busy = false;
+        if (!_account.isLoggedIn) _bindings = [];
+      });
     }
   }
 
@@ -80,7 +88,9 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
     setState(() {
       _bindings = bindings;
       _status = widget.onSelectDevice != null
-          ? '已读取 ${_account.devices.length} 台账号设备，请选择要连接的录音卡'
+          ? _account.devices.isEmpty
+              ? '账号暂无设备，可以添加新录音卡'
+              : '已读取 ${_account.devices.length} 台账号设备，请选择要连接的录音卡'
           : bindings.isNotEmpty
               ? '已读取 ${bindings.length} 台具备恢复材料的设备，请核对当前卡的 SN'
               : _account.totalDevices == 0
@@ -158,8 +168,9 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                       icon: const Icon(Icons.close)),
                 ]),
                 Text(widget.onSelectDevice != null
-                    ? '先使用自己的 YoooClaw App 账号登录，再选择设备并连接。验证码和登录会话只在本次连接页面的内存中使用。'
-                    : '使用你自己的 YoooClaw App 账号验证码登录，读取已有设备绑定资料。验证码和登录会话只在本页内存中使用，关闭后清除。'),
+                    ? '使用自己的 YoooClaw App 账号登录，再选择已有设备或添加新录音卡。'
+                    : '使用自己的 YoooClaw App 账号登录，读取设备绑定资料。'),
+                const Text('登录状态会安全保存在本机，重新打开时自动恢复；验证码不保存。'),
                 const SizedBox(height: 8),
                 if (widget.onSelectDevice == null)
                   const Text(
@@ -168,8 +179,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                 if (widget.onSelectDevice == null)
                   Text('当前录音卡 SN：${notifier.detectedBleSerial}'),
                 const SizedBox(height: 12),
-                if (!_account.isLoggedIn) ...[
-                  if (widget.onReconnectVerified != null) ...[
+                if (widget.onReconnectVerified != null) ...[
                     OutlinedButton(
                         onPressed: _busy
                             ? null
@@ -183,7 +193,8 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                                 }),
                         child: const Text('使用本机已验证身份重连')),
                     const SizedBox(height: 8),
-                  ],
+                ],
+                if (!_account.isLoggedIn) ...[
                   TextField(
                       controller: _phone,
                       enabled: !_busy,
@@ -225,9 +236,29 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                           ? '登录并读取我的设备'
                           : '登录并读取我的绑定设备')),
                 ] else ...[
+                  Text(_account.isSessionSaved
+                      ? '登录状态已安全保存'
+                      : '本次登录可用，尚未安全保存；关闭后可能需要重新登录'),
                   OutlinedButton(
                       onPressed: _busy ? null : () => _run(_loadBindings),
                       child: const Text('重新读取我的设备')),
+                  TextButton(
+                      onPressed: _busy ? null : () => _run(() async {
+                        await _account.logout();
+                        if (!mounted) return;
+                        _timer?.cancel();
+                        _phone.clear();
+                        _code.clear();
+                        setState(() {
+                          _seconds = 0;
+                          _bindings = [];
+                          _status = '已退出官方账号，录音卡的本机业务密钥保留';
+                        });
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+                        });
+                      }),
+                      child: const Text('退出官方账号')),
                 ],
                 if (_busy)
                   const Padding(
@@ -247,6 +278,15 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                       child: const Text('复制账号诊断（不含凭据）')),
                 ],
                 if (widget.onSelectDevice != null && _account.isLoggedIn) ...[
+                  if (widget.onAddDevice != null) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                        onPressed: _busy ? null : widget.onAddDevice,
+                        icon: const Icon(Icons.add),
+                        label: const Text('添加新录音卡')),
+                    const Text('用于账号列表中尚无记录的卡片。已有设备请选择下方记录；添加不会自动解绑或重置卡片。'),
+                    const SizedBox(height: 20),
+                  ],
                   const Text(
                       '选择连接后，将验证卡片的真实挑战，并将新绑定资料同步到自己的官方账号。录音、MOSS-ASR 和 Hermes 仍直连私有端点。'),
                   for (final device in _account.devices) ...[

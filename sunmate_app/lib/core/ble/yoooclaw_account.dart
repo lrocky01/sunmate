@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'ble_protocol.dart';
 import 'recorder_authentication.dart';
+import 'official_account_session_store.dart';
 
 /// 仅使用用户自己登录后取得的绑定资料；不负责录音、转写或代理 AI 请求。
 class OwnedRecorderBinding {
@@ -163,15 +164,21 @@ enum OfficialAccountStage {
 
 /// App 同源渠道 3 的短信、登录与设备列表已由用户正常验证码登录验证。
 /// 登录字段最初由静态线索组合，已被真实服务接受；不等同于捕获了 APK 请求。
-/// 会话只在本次页面内存中存在；持久保存的只有用户确认恢复的设备共享密钥。
+/// 登录会话保存在系统安全存储，验证码不保存；打开后由正常账号接口核验有效性。
 class YoooClawAccount {
   static const deviceService = 'https://openclaw-service.yoooclaw.com';
   final Dio _http;
+  final OfficialAccountSessionStore _sessionStore;
+  static Future<void> _sessionStorageQueue = Future.value();
+  bool _sessionSaved = false;
+  bool get isSessionSaved => _sessionSaved;
   String? _token;
   String? _userId;
   bool _closed = false;
   List<OwnedRecorderBinding> _bindings = [];
   List<AccountRecorderDevice> _devices = [];
+  Set<String> _listedSerials = {};
+  bool _hasDeviceSnapshot = false;
   List<AccountRecorderDevice> get devices => List.unmodifiable(_devices);
   int _revision = 0;
   final List<String> _diagnostics = [];
@@ -180,13 +187,100 @@ class YoooClawAccount {
   int missingSharedSecretDevices = 0;
   bool get isLoggedIn => !_closed && _token != null;
 
-  YoooClawAccount({Dio? http})
-      : _http = http ??
+  YoooClawAccount({Dio? http, OfficialAccountSessionStore? sessionStore})
+      : _sessionStore = sessionStore ?? SecureOfficialAccountSessionStore(),
+        _http = http ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 15),
               receiveTimeout: const Duration(seconds: 30),
               sendTimeout: const Duration(seconds: 15),
             ));
+
+  Future<T> _withSessionStore<T>(Future<T> Function() action) {
+    final operation = _sessionStorageQueue.then((_) => action());
+    _sessionStorageQueue = operation.then<void>((_) {}, onError: (Object _) {});
+    return operation;
+  }
+
+  Map<String, String>? _decodeSession(String value) {
+    if (value.length > 12000) return null;
+    try {
+      final data = jsonDecode(value);
+      if (data is! Map || data['version'] != 1) return null;
+      final token = data['token'], userId = data['userId'];
+      if (token is! String || userId is! String || !_validSession(token, userId)) {
+        return null;
+      }
+      return {'token': token, 'userId': userId};
+    } on FormatException {
+      return null;
+    }
+  }
+
+  bool _validSession(String token, String userId) => token.isNotEmpty &&
+      token.length <= 8192 &&
+      RegExp(r'^[A-Za-z0-9._~+/-]+=*$').hasMatch(token) &&
+      RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(userId);
+
+  Future<bool> restoreSession() async {
+    if (_closed) throw const OfficialAccountException('账号页面已关闭');
+    if (isLoggedIn) return true;
+    final revision = _revision;
+    final Map<String, String>? saved;
+    try {
+      saved = await _withSessionStore(() async {
+        final value = await _sessionStore.read();
+        if (value == null) return null;
+        final decoded = _decodeSession(value);
+        if (decoded == null) await _sessionStore.delete();
+        return decoded;
+      });
+    } catch (_) {
+      throw const OfficialAccountException('暂时无法读取本机保存的登录，可稍后重试或手动登录');
+    }
+    if (_closed || revision != _revision || saved == null) return false;
+    _token = saved['token'];
+    _userId = saved['userId'];
+    _sessionSaved = true;
+    _revision++;
+    _appendDiagnostic('已恢复本机安全保存的登录；仍需服务器确认有效性');
+    return true;
+  }
+
+  Future<void> logout() async {
+    if (_closed) throw const OfficialAccountException('账号页面已关闭');
+    final revision = ++_revision;
+    _clearBindings();
+    try {
+      await _withSessionStore(() => _sessionStore.delete());
+    } catch (_) {
+      throw const OfficialAccountException('本机保存的登录未能清除，请重试退出账号');
+    }
+    if (revision != _revision) return;
+    _token = null;
+    _userId = null;
+    _sessionSaved = false;
+    _appendDiagnostic('已退出官方账号；录音卡业务密钥保留');
+  }
+
+  Future<void> _invalidateSession(String token, int revision) async {
+    if (_closed || _token != token || _revision != revision) return;
+    _revision++;
+    _token = null;
+    _userId = null;
+    _sessionSaved = false;
+    _clearBindings();
+    try {
+      await _withSessionStore(() async {
+        final value = await _sessionStore.read();
+        if (value != null && _decodeSession(value)?['token'] == token) {
+          await _sessionStore.delete();
+        }
+      });
+    } catch (_) {
+      _appendDiagnostic('登录已失效，本机缓存清理未完成；请重新登录');
+    }
+  }
 
   void _record(OfficialAccountStage stage, int? status,
       {String? code, String? scheme}) {
@@ -215,6 +309,8 @@ class YoooClawAccount {
     if (authenticated && !isLoggedIn) {
       throw const OfficialAccountException('请先通过自己的手机号验证码登录');
     }
+    final requestToken = _token;
+    final requestRevision = _revision;
     try {
       final response = await _http.post<String>('$origin$path',
           data: data,
@@ -235,6 +331,9 @@ class YoooClawAccount {
             },
           ));
       if (_closed) throw const OfficialAccountException('账号页面已关闭');
+      if (authenticated && requestRevision != _revision) {
+        throw const OfficialAccountException('账号会话已变化，请重新读取设备');
+      }
       final text = response.data;
       if (response.statusCode != 200 ||
           text == null ||
@@ -268,6 +367,9 @@ class YoooClawAccount {
         // HTML/纯文本错误页不显示正文，其中可能有凭据或追踪信息。
       }
       _record(stage, status, code: code, scheme: scheme);
+      if (authenticated && status == 401 && requestToken != null) {
+        await _invalidateSession(requestToken, requestRevision);
+      }
       final reason = status == 401
           ? '登录凭证未被接受，请重新登录；尚不能据此判断 SDK 授权要求'
           : status == 403
@@ -310,7 +412,8 @@ class YoooClawAccount {
       throw const OfficialAccountException('请输入正确的手机号和 4 位验证码');
     }
     _token = null;
-    _revision++;
+    _sessionSaved = false;
+    final loginRevision = ++_revision;
     _userId = null;
     _clearBindings();
     final result = await _post(
@@ -323,6 +426,9 @@ class YoooClawAccount {
           'deviceId': 'deviceId'
         });
     _requireSuccess(result, stage: OfficialAccountStage.login);
+    if (_closed || loginRevision != _revision) {
+      throw const OfficialAccountException('登录请求已失效，请使用当前登录结果');
+    }
     final user = result['data'];
     final token = user is Map ? user['jwtToken'] : null;
     final id = user is Map ? user['id'] : null;
@@ -333,14 +439,26 @@ class YoooClawAccount {
         .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '')
         .trim();
     final userId = '$id';
-    if (normalized.isEmpty ||
-        normalized.length > 8192 ||
-        !RegExp(r'^[A-Za-z0-9._~+/-]+=*$').hasMatch(normalized) ||
-        !RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(userId)) {
+    if (!_validSession(normalized, userId)) {
       throw const OfficialAccountException('官方 App 账号接口返回的会话格式不兼容');
     }
     _token = normalized;
     _userId = userId;
+    final revision = _revision;
+    try {
+      await _withSessionStore(() async {
+        if (_closed || revision != _revision) return;
+        await _sessionStore.write(jsonEncode({
+          'version': 1, 'token': normalized, 'userId': userId
+        }));
+        if (!_closed && revision == _revision) _sessionSaved = true;
+      });
+    } catch (_) {
+      _appendDiagnostic('本次登录可用，但系统安全存储未能保存，关闭后需重新登录');
+    }
+    if (_closed || revision != _revision) {
+      throw const OfficialAccountException('登录会话已变化，请重新打开账号页面');
+    }
   }
 
   Future<List<OwnedRecorderBinding>> loadBindings() async {
@@ -389,6 +507,8 @@ class YoooClawAccount {
         .whereType<AccountRecorderDevice>()
         .where((device) => counts[device.serialNumber] == 1)
         .toList();
+    _listedSerials = counts.keys.toSet();
+    _hasDeviceSnapshot = true;
     _appendDiagnostic('设备资料：记录 $totalDevices；可恢复 ${_bindings.length}；'
         'sharedSecret 字段缺失 $missingSharedSecretDevices');
     return List.unmodifiable(_bindings);
@@ -426,7 +546,6 @@ class YoooClawAccount {
   RecorderAccountSession sessionForDevice(AccountRecorderDevice selected) {
     final serial = selected.serialNumber;
     final revision = _revision;
-    String? checkedMac;
     void ensureCurrent(String sn) {
       if (!isLoggedIn ||
           revision != _revision ||
@@ -437,6 +556,40 @@ class YoooClawAccount {
     }
 
     ensureCurrent(serial);
+    return _sessionForSelection(serial, selected.deviceName, ensureCurrent,
+        uuid: selected.uuid, hasRecoverableKey: selected.hasRecoverableKey);
+  }
+
+  RecorderAccountSession sessionForNewDevice(RecorderScanIdentity identity) {
+    final serial = identity.serialNumber;
+    final revision = _revision;
+    void ensureCurrent(String sn) {
+      if (!isLoggedIn ||
+          revision != _revision ||
+          !_hasDeviceSnapshot ||
+          sn != serial) {
+        throw const OfficialAccountException('账号资料已变化，请返回重新读取设备后再添加');
+      }
+      // 包括重复记录：不能绕过已有设备恢复或歧义检查进入首次协商。
+      if (_listedSerials.contains(serial)) {
+        throw const OfficialAccountException('该 SN 已在账号设备列表中，请返回选择已有设备');
+      }
+    }
+
+    ensureCurrent(serial);
+    if (!identity.isFresh(DateTime.now())) {
+      throw const OfficialAccountException('扫描记录已过期，请重新搜索录音卡');
+    }
+    return _sessionForSelection(serial, identity.deviceName, ensureCurrent,
+        newDeviceIdentity: identity);
+  }
+
+  RecorderAccountSession _sessionForSelection(String serial, String deviceName,
+      void Function(String) ensureCurrent,
+      {String? uuid,
+      bool hasRecoverableKey = false,
+      RecorderScanIdentity? newDeviceIdentity}) {
+    String? checkedMac;
     return RecorderAccountSession(
         serial,
         ({required checkContent, required mac, required sn}) async {
@@ -477,33 +630,38 @@ class YoooClawAccount {
               authenticated: true,
               data: {
                 'deviceId': serial,
-                'deviceName': selected.deviceName,
+                'deviceName': deviceName,
                 'extInfo': {
                   'mac': mac,
                   'sharedSecret': sharedSecret,
-                  if (selected.uuid != null) 'uuid': selected.uuid
+                  if (uuid != null) 'uuid': uuid
                 }
               });
           ensureCurrent(sn);
           _requireSuccess(result, stage: OfficialAccountStage.binding);
         },
-        hasRecoverableKey: selected.hasRecoverableKey,
-        restoreKey: (deviceId, protocol, detectedSerial, store) async {
-          ensureCurrent(detectedSerial);
-          final candidates = _bindings
-              .where((binding) => binding.matches(detectedSerial, protocol))
-              .toList();
-          if (candidates.length != 1) return false;
-          await candidates.single.saveForDevice(store, deviceId);
-          ensureCurrent(detectedSerial);
-          return true;
-        });
+        hasRecoverableKey: hasRecoverableKey,
+        newDeviceIdentity: newDeviceIdentity,
+        restoreKey: newDeviceIdentity != null
+            ? null
+            : (deviceId, protocol, detectedSerial, store) async {
+                ensureCurrent(detectedSerial);
+                final candidates = _bindings
+                    .where((binding) => binding.matches(detectedSerial, protocol))
+                    .toList();
+                if (candidates.length != 1) return false;
+                await candidates.single.saveForDevice(store, deviceId);
+                ensureCurrent(detectedSerial);
+                return true;
+              });
   }
 
   void _clearBindings() {
     for (final binding in _bindings) binding.clear();
     _bindings = [];
     _devices = [];
+    _listedSerials = {};
+    _hasDeviceSnapshot = false;
     totalDevices = 0;
     missingSharedSecretDevices = 0;
   }
@@ -513,6 +671,7 @@ class YoooClawAccount {
     _closed = true;
     _token = null;
     _userId = null;
+    _sessionSaved = false;
     _clearBindings();
     _diagnostics.clear();
     _http.close(force: true);

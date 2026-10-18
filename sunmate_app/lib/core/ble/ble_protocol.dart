@@ -4,6 +4,50 @@ import 'ble_constants.dart';
 
 enum RecorderProtocol { telink, aiNote6095 }
 
+/// 点击扫描结果时取得的身份快照；SN 仍须由实际 GATT 和设备挑战确认。
+class RecorderScanIdentity {
+  static const maximumAge = Duration(seconds: 30);
+  final String remoteId;
+  final String serialNumber;
+  final String deviceName;
+  final DateTime observedAt;
+  final RecorderProtocol protocol;
+
+  RecorderScanIdentity._(this.remoteId, this.serialNumber, this.deviceName,
+      this.observedAt)
+      : protocol = RecorderProtocol.telink;
+
+  bool isFresh(DateTime now) {
+    final age = now.difference(observedAt);
+    return !age.isNegative && age <= maximumAge;
+  }
+
+  static RecorderScanIdentity? fromAdvertisement({
+    required String remoteId,
+    required String deviceName,
+    required Map<int, List<int>> manufacturerData,
+    required bool connectable,
+    required DateTime observedAt,
+    DateTime? now,
+  }) {
+    final serial = RecorderAdvertisementSerial.telink(manufacturerData);
+    if (!connectable ||
+        serial == null ||
+        remoteId.isEmpty ||
+        remoteId.length > 128) {
+      return null;
+    }
+    final identity = RecorderScanIdentity._(
+        remoteId,
+        serial,
+        deviceName.trim().isNotEmpty && deviceName.length <= 64
+            ? deviceName.trim()
+            : '录音卡',
+        observedAt);
+    return identity.isFresh(now ?? DateTime.now()) ? identity : null;
+  }
+}
+
 /// 仅解析已确认的 Telink 厂商广播布局，不从名称或任意字节中搜索 SN。
 class RecorderAdvertisementSerial {
   static String? telink(Map<int, List<int>> data) {

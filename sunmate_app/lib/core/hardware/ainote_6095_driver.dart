@@ -151,7 +151,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.20+21',
+        'SunMate 1.0.21+22',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备匹配 SN: $_serialNumber；来源: $_serialSource',
@@ -265,6 +265,18 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     final cancellation = Completer<void>();
     _connectCancellation = cancellation;
     Timer? progress;
+    // 在提交系统连接前固定本次扫描身份；系统配对等待不应使已选广播过期。
+    final selectedAt = DateTime.now();
+    final scannedSerials = <String>{};
+    for (final result in FlutterBluePlus.lastScanResults
+        .where((r) => r.device.remoteId == device.remoteId)) {
+      final age = selectedAt.difference(result.timeStamp);
+      if (age.isNegative || age > RecorderScanIdentity.maximumAge) continue;
+      final serial = RecorderAdvertisementSerial.telink(
+          result.advertisementData.manufacturerData);
+      if (serial != null) scannedSerials.add(serial);
+    }
+    final newIdentity = accountSession?.newDeviceIdentity;
     try {
       await _initialization;
       _checkGeneration(generation);
@@ -296,6 +308,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _batteryLevel = 0;
       _phase = '准备连接';
       _ready = Completer<bool>();
+      if (newIdentity != null &&
+          (newIdentity.remoteId.toLowerCase() != device.remoteId.str.toLowerCase() ||
+              !newIdentity.isFresh(selectedAt) ||
+              scannedSerials.length != 1 ||
+              scannedSerials.single != newIdentity.serialNumber)) {
+        throw const OfficialAccountException('首次绑定的扫描身份不匹配或已过期，请重新搜索');
+      }
       await FlutterBluePlus.stopScan();
       await _clearSubscriptions();
       if (_device?.isConnected ?? false)
@@ -402,16 +421,11 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (profile == null)
         throw StateError('未找到唯一完整的已知业务 profile；保留 GATT 日志，不向未知或 OTA 特征写入');
       _profile = profile;
+      if (newIdentity != null && profile.protocol != newIdentity.protocol) {
+        throw const OfficialAccountException('实际 GATT 与首次绑定的广播协议不一致');
+      }
       if (profile.protocol == RecorderProtocol.telink) {
-        final serials = <String>{};
-        for (final result in FlutterBluePlus.lastScanResults
-            .where((r) => r.device.remoteId == device.remoteId)) {
-          final age = DateTime.now().difference(result.timeStamp);
-          if (age.isNegative || age > const Duration(seconds: 30)) continue;
-          final serial = RecorderAdvertisementSerial.telink(
-              result.advertisementData.manufacturerData);
-          if (serial != null) serials.add(serial);
-        }
+        final serials = scannedSerials;
         if (serials.length > 1) throw StateError('同一设备的广播 SN 冲突，未加载账号密钥');
         if (serials.isNotEmpty) {
           final serial = serials.single;
@@ -461,6 +475,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       );
       _hasSharedKey = await _authentication!.loadKey();
       _checkGeneration(generation);
+      if (newIdentity != null && _hasSharedKey) {
+        throw const OfficialAccountException('本机已有业务密钥，请返回使用本机已验证身份重连；未重新协商');
+      }
       _log('本机合法共享密钥=${_hasSharedKey ? "已保存" : "尚无"}（不输出内容）');
       BluetoothCharacteristic find(String serviceId, String charId) => services
           .firstWhere((s) => BleConstants.normalize(s.uuid.str) == serviceId)

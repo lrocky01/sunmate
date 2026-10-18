@@ -5,6 +5,25 @@ import 'package:sunmate_app/core/ble/ble_json_rpc.dart';
 import 'package:sunmate_app/core/ble/ble_protocol.dart';
 
 void main() {
+  test('scan identity requires fresh connectable exact Telink advertisement', () {
+    final now = DateTime(2026, 10, 18, 18);
+    final data = {0x1c0d: [1, 255, 0x1d, 0x2c, ...ascii.encode('AB00000000000001')]};
+    RecorderScanIdentity? selection({bool connectable = true,
+        Duration age = Duration.zero, Map<int, List<int>>? manufacturer}) =>
+        RecorderScanIdentity.fromAdvertisement(remoteId: 'selected-peripheral',
+            deviceName: 'C·ONE-test', manufacturerData: manufacturer ?? data,
+            connectable: connectable, observedAt: now.subtract(age), now: now);
+    final identity = selection()!;
+    data[0x1c0d]!.clear();
+    expect(identity.serialNumber, 'AB00000000000001');
+    expect(identity.protocol, RecorderProtocol.telink);
+    final valid = {0x1c0d: [1, 255, 0x1d, 0x2c, ...ascii.encode('AB00000000000001')]};
+    expect(selection(manufacturer: valid, connectable: false), isNull);
+    expect(selection(manufacturer: valid, age: const Duration(seconds: 31)), isNull);
+    expect(selection(manufacturer: valid, age: const Duration(seconds: -1)), isNull);
+    expect(selection(manufacturer: {}), isNull);
+    expect(identity.isFresh(now.add(const Duration(seconds: 31))), false);
+  });
   test('Telink serial parses exact combined and separate manufacturer layouts',
       () {
     const sn = 'AB00000000000001';

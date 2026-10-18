@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,7 +12,7 @@ import 'package:sunmate_app/core/ble/ble_constants.dart';
 import 'package:sunmate_app/core/hardware/ainote_6095_driver.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
 import 'package:sunmate_app/core/ble/recorder_authentication.dart';
-import 'yoooclaw_account_test.dart' show record;
+import 'yoooclaw_account_test.dart' show record, scanIdentity, AccountHttpAdapter, response, MemoryOfficialSessionStore;
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 /// 模拟 GATT 操作与设备异步事件，检查驱动不会把 ATT 成功误当业务成功。
@@ -387,6 +388,102 @@ void main() {
   tearDown(() async {
     await driver.dispose();
     await FlutterBluePlus.stopScan();
+  });
+
+  for (final outcome in ['success', 'device rejection', 'cloud failure', 'old local key', 'different peripheral']) {
+    test('empty-account first addition: $outcome', () async {
+      await driver.dispose();
+      final keys = MemoryKeyStore();
+      if (outcome == 'old local key') keys.value = base64Encode(shared);
+      driver = AiNote6095Driver(keyStore: keys,
+          authenticationTimeout: const Duration(seconds: 2));
+      final adapter = AccountHttpAdapter();
+      final account = YoooClawAccount(http: Dio()..httpClientAdapter = adapter,
+          sessionStore: MemoryOfficialSessionStore());
+      addTearDown(account.close);
+      adapter.respond = (request) {
+        if (request.path.endsWith('/loginOrRegister')) {
+          return response({'code': '000000', 'data': {'jwtToken': 'test-only-session', 'id': '123'}});
+        }
+        if (request.path.endsWith('/index')) {
+          return response({'code': '000000', 'data': {'deviceList': []}});
+        }
+        if (request.path.endsWith('/check')) {
+          return response({'code': '000000', 'data': {'hmac': 'test-only-issued-hmac'}});
+        }
+        return response({'code': outcome == 'cloud failure' ? '403' : '000000'});
+      };
+      await account.login('13800000000', '1234');
+      await account.loadBindings();
+      await platform.advertise(device.remoteId, {0x1c0d: [
+        1, 255, 0x1d, 0x2c, ...ascii.encode('AB00000000000001')
+      ]});
+      final session = account.sessionForNewDevice(scanIdentity(
+          remoteId: outcome == 'different peripheral' ? 'other-device' : device.remoteId.str));
+      platform.firstBinding = true;
+      platform.requiresBindRequest = true;
+      platform.rejectBindRequest = outcome == 'device rejection';
+      expect(await driver.connectDevice(device, accountSession: session), outcome == 'success');
+      expect(driver.isConnected, outcome == 'success');
+      final paths = adapter.requests.map((r) => r.uri.path).toList();
+      expect(paths.any((p) => p.endsWith('/unbind')), false);
+      if (outcome == 'success' || outcome == 'cloud failure') {
+        expect(paths, containsAllInOrder([
+          '/api/device/toc/externalDeviceBind/check',
+          '/api/device/toc/externalDeviceBind/bind'
+        ]));
+        expect(keys.writes, 1);
+        expect(base64Decode(keys.value!), platform.peerSecret);
+      } else {
+        expect(paths, hasLength(2));
+        expect(keys.writes, 0);
+      }
+      if (outcome == 'success') {
+        expect(platform.connectCount, 2);
+        await driver.disconnect();
+        final count = adapter.requests.length;
+        expect(await driver.connectDevice(device), true);
+        expect(adapter.requests.length, count);
+        expect(keys.writes, 1);
+      } else if (outcome == 'old local key') {
+        expect(keys.value, base64Encode(shared));
+        expect(platform.writes, isEmpty);
+      } else if (outcome == 'different peripheral') {
+        expect(platform.connectCount, 0);
+        expect(platform.writes, isEmpty);
+      } else if (outcome == 'device rejection') {
+        expect(keys.value, isNull);
+        expect(platform.connectCount, 1);
+      }
+      expect('${driver.diagnosticText}\n${account.diagnostics.join("\n")}',
+          isNot(contains('test-only-issued-hmac')));
+      if (keys.value != null) expect(driver.diagnosticText, isNot(contains(keys.value!)));
+    });
+  }
+
+  test('selected advertisement survives scan cache clearing while system connects', () async {
+    await driver.dispose();
+    final keys = MemoryKeyStore();
+    driver = AiNote6095Driver(keyStore: keys);
+    platform.authenticate = true;
+    platform.identityOnSubscribe = true;
+    platform.connectGate = Completer<void>();
+    await platform.advertise(device.remoteId, {0x1c0d: [
+      1, 17, 0x1d, 0x2c, ...ascii.encode('AB00000000000001')
+    ]});
+    final binding = OwnedRecorderBinding.fromAccountRecord(record())!;
+    addTearDown(binding.clear);
+    final connected = driver.connectDevice(device, accountSession: sessionWithBinding(binding));
+    while (platform.connectCount == 0) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    // 模拟其它扫描会话替换缓存；不要等待被连接调用占用的平台串行队列。
+    FlutterBluePlus.lastScanResults.clear();
+    expect(FlutterBluePlus.lastScanResults, isEmpty);
+    platform.connectGate!.complete();
+    expect(await connected, true);
+    expect(keys.writes, 1);
+    expect(driver.snNumber, binding.serialNumber);
   });
 
   test('OTA-only device is disconnected without a single write', () async {

@@ -96,16 +96,17 @@ typedef ManufacturerVerifier = Future<String> Function(
 typedef PairingCommitter = Future<void> Function(
     {required String sn, required String mac, required String sharedSecret});
 
-/// 一次账号设备选择的能力；会话与密钥不出现在诊断或 toString 中。
+/// 一次已有设备恢复或新卡选择的能力；会话与密钥不出现在诊断中。
 class RecorderAccountSession {
   final String serialNumber;
   final ManufacturerVerifier verifier;
   final PairingCommitter committer;
   final bool hasRecoverableKey;
+  final RecorderScanIdentity? newDeviceIdentity;
   final Future<bool> Function(String deviceId, RecorderProtocol protocol,
       String detectedSerial, RecorderKeyStore store)? restoreKey;
   RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
-      {this.restoreKey, this.hasRecoverableKey = false});
+      {this.restoreKey, this.hasRecoverableKey = false, this.newDeviceIdentity});
 }
 
 enum RecorderAuthenticationState {
