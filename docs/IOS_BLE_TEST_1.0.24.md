@@ -22,4 +22,11 @@
 
 ## 检查与交付
 
-本地 `flutter test --no-pub --reporter expanded` 全量 169 项通过（含新增 21 项恢复边界、4 项 Widget）；`flutter analyze --no-pub --no-fatal-infos` 退出 0，无 error/warning，11 条既有弃用 info；`git diff --check` 通过。版本与首页/设置/诊断一致。main 构建及下载核验待记录。此包为无签名测试 IPA，需个人自签安装；实体完整鉴权和录音由本轮安装测试验收。
+本地 `flutter test --no-pub --reporter expanded` 全量 169 项通过（含新增 21 项恢复边界、4 项 Widget）；`flutter analyze --no-pub --no-fatal-infos` 退出 0，无 error/warning，11 条既有弃用 info；`git diff --check` 通过。版本与首页/设置/诊断一致。main 构建及下载核验已完成，记录如下。此包为无签名测试 IPA，需个人自签安装；实体完整鉴权和录音由本轮安装测试验收。
+
+
+- 源码提交 `6b6d6021f415e46cbbc2c647ff2e9407ef3369fc` 已推送 main；[Actions #40](https://github.com/lrocky01/sunmate/actions/runs/39198534091) 的检查、iOS Release 编译、打包和上传全部成功，artifact `12162432903`。
+- IPA：`build_output/SunMate-1.0.24+25.ipa`，8,631,374 字节；SHA-256 `48650f1f2c08274cae00e96f98df4caedaed75f0cd6115f68f1051c417653467`。
+- Artifact ZIP SHA-256 `45ae11c39a7fd5071d2d11a8933e7e17e55b9f5d1625618b02cf52b7653c5b83`，与 GitHub 摘要一致；IPA 全成员 CRC 检查通过。
+- Info.plist 为 1.0.24 / Build 25、bundle `com.sunmate.app`；首页与诊断版本、恢复路由和「继续验证」标记、真实身份挑战协议、登录保存、安全存储、原生 BLE/ANCS 及权限用途组件均通过包内核验。
+- 组件标记和测试不代表真机挑战已通过。无签名测试 IPA 已下载，沿用此前个人自签方式覆盖安装；本次未直接操作手机、解绑或覆盖旧密钥，实体稳定连接及录音待用户验收。
