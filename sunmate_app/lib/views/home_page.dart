@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
 import '../core/ble/ble_protocol.dart';
 import '../core/ble/yoooclaw_account.dart';
+import '../core/ble/recorder_saved_identity.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
 import 'recorder_account_sheet.dart';
@@ -27,7 +28,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.23+24 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.24+25 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -394,7 +395,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.23+24', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.24+25', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -453,6 +454,11 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   bool _isConnecting = false;
   String? _connectingDeviceName;
   String? _connectionError;
+  String? _recoveryError;
+  List<RecorderRecoveryCandidate> _recoveryCandidates = [];
+  RecorderRecoveryCandidate? _selectedRecovery;
+  bool _loadingRecovery = false;
+  int _recoveryRequest = 0;
   StreamSubscription<String>? _logSub;
 
   @override
@@ -460,6 +466,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     super.initState();
     _account = widget.account ?? YoooClawAccount();
     _deviceNotifier = ref.read(deviceProvider.notifier);
+    unawaited(_refreshRecovery(includeSystem: false));
     // 监听底层实时诊断日志，逐行驱动 UI 点亮
     _logSub = ref.read(deviceProvider.notifier).logStream.listen((_) {
       if (mounted) setState(() {});
@@ -479,6 +486,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
             .first
             .timeout(const Duration(seconds: 4));
       }
+      unawaited(_refreshRecovery());
       await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
     } catch (e) {
       if (mounted) {
@@ -489,8 +497,142 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     }
   }
 
+  Future<void> _refreshRecovery({bool includeSystem = true}) async {
+    final request = ++_recoveryRequest;
+    final selected = _selectedAccountDevice;
+    if (_addingNewDevice) {
+      if (mounted)
+        setState(() {
+          _recoveryCandidates = [];
+          _recoveryError = null;
+        });
+      return;
+    }
+    if (mounted)
+      setState(() {
+        _loadingRecovery = true;
+        _recoveryError = null;
+      });
+    try {
+      final session = selected == null
+          ? null
+          : _account.sessionForDevice(selected);
+      final candidates = await _deviceNotifier.recoveryCandidates(
+        accountSession: session,
+        includeSystemDevices: includeSystem,
+      );
+      if (!mounted || request != _recoveryRequest) return;
+      setState(() {
+        _recoveryCandidates = candidates
+            .where(
+              (c) =>
+                  selected != null ||
+                  _selectedRecovery != null ||
+                  !c.identity.previouslyVerified,
+            )
+            .toList();
+      });
+    } catch (error) {
+      if (!mounted || request != _recoveryRequest) return;
+      setState(() {
+        _recoveryCandidates = [];
+        _recoveryError = error is OfficialAccountException
+            ? error.message
+            : error is StateError
+            ? '${error.message}'
+            : '读取本机恢复信息失败，请重新读取；无需解绑';
+      });
+    } finally {
+      if (mounted && request == _recoveryRequest)
+        setState(() => _loadingRecovery = false);
+    }
+  }
+
+  Future<void> _connectRecovery(RecorderRecoveryCandidate candidate) async {
+    if (_isConnecting || _deviceNotifier.isBleConnecting) return;
+    setState(() {
+      _selectedRecovery = candidate;
+      _isConnecting = true;
+      _connectingDeviceName = candidate.identity.deviceName;
+      _connectionError = null;
+    });
+    var connected = false;
+    String? error;
+    try {
+      connected = await _deviceNotifier.connectDevice(
+        BluetoothDevice.fromId(candidate.identity.remoteId),
+        recoveryCandidate: candidate,
+        accountSession: _selectedAccountDevice == null
+            ? null
+            : _account.sessionForDevice(_selectedAccountDevice!),
+      );
+    } on OfficialAccountException catch (e) {
+      error = e.message;
+    } catch (_) {
+      error = '恢复连接未完成，请查看蓝牙诊断；已有密钥保持';
+    }
+    if (!mounted) return;
+    setState(() {
+      _isConnecting = false;
+      if (!connected)
+        _connectionError =
+            error ?? _deviceNotifier.lastError ?? '尚未收到本次身份验证成功回执';
+    });
+    if (connected) {
+      Navigator.of(context).maybePop();
+    } else {
+      unawaited(_refreshRecovery());
+    }
+  }
+
+  Widget _recoveryTile(RecorderRecoveryCandidate candidate) => ListTile(
+    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+    leading: const Icon(Icons.bluetooth_connected),
+    title: Text(candidate.identity.deviceName),
+    subtitle: Text(
+      'SN：${candidate.identity.serialNumber}\n${candidate.systemConnected ? '系统已连接 · 等待身份验证' : '本机密钥已保存 · 等待身份验证'}',
+    ),
+    isThreeLine: true,
+    trailing: FilledButton(
+      onPressed: _isConnecting || _deviceNotifier.isBleConnecting
+          ? null
+          : () => _connectRecovery(candidate),
+      child: const Text('继续验证'),
+    ),
+  );
+
+  Widget _recoverySection() => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (_recoveryCandidates.isNotEmpty) ...[
+        const Text('本机已保存的录音卡', style: TextStyle(fontWeight: FontWeight.bold)),
+        ..._recoveryCandidates.map(_recoveryTile),
+      ],
+      if (_loadingRecovery)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          child: Text('正在读取可恢复的录音卡…'),
+        ),
+      if (_recoveryError != null) ...[
+        Text(
+          _recoveryError!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+        TextButton(
+          onPressed: _isConnecting || _deviceNotifier.isBleConnecting
+              ? null
+              : () => _refreshRecovery(
+                  includeSystem: _selectedAccountDevice != null,
+                ),
+          child: const Text('重新读取可恢复设备'),
+        ),
+      ],
+    ],
+  );
+
   @override
   void dispose() {
+    ++_recoveryRequest;
     _logSub?.cancel();
     if (_isConnecting) {
       unawaited(_deviceNotifier.cancelBleConnection());
@@ -511,6 +653,8 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
         children: [
           if (_selectedAccountDevice != null)
             RecorderAccountDeviceInfo(device: _selectedAccountDevice!)
+          else if (_selectedRecovery != null)
+            Text('SN：${_selectedRecovery!.identity.serialNumber}；密钥已保存，仍需本次设备验证。')
           else
             const Text('选择附近的新录音卡后，验证设备身份并保存绑定。当前首次添加支持 C·ONE（Telink）。'),
           if (notifier.supportsAncsRequestConfiguration)
@@ -543,11 +687,12 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   Widget build(BuildContext context) {
     final devNotifier = ref.read(deviceProvider.notifier);
 
-    if (_selectedAccountDevice == null && !_addingNewDevice) {
+    if (_selectedAccountDevice == null && !_addingNewDevice && _selectedRecovery == null) {
       return Material(color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         clipBehavior: Clip.antiAlias,
         child: RecorderAccountSheet(account: _account, closeAccountOnDispose: false,
+        savedIdentitySection: _recoverySection(),
         onReconnectVerified: devNotifier.canReconnectVerifiedDevice ? () async {
           _isConnecting = true;
           final connected = await devNotifier.autoReconnect();
@@ -557,11 +702,25 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
           return connected;
         } : null,
         onSelectDevice: (device) {
-          setState(() => _selectedAccountDevice = device);
+          ++_recoveryRequest;
+          setState(() {
+            _selectedAccountDevice = device;
+            _selectedRecovery = null;
+            _recoveryCandidates = [];
+            _recoveryError = null;
+            _loadingRecovery = false;
+          });
           _startScan();
         },
         onAddDevice: () {
-          setState(() => _addingNewDevice = true);
+          ++_recoveryRequest;
+          setState(() {
+            _addingNewDevice = true;
+            _selectedRecovery = null;
+            _recoveryCandidates = [];
+            _loadingRecovery = false;
+            _recoveryError = null;
+          });
           _startScan();
         }));
     }
@@ -596,8 +755,10 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                     setState(() {
                       _addingNewDevice = false;
                       _selectedAccountDevice = null;
+                      _selectedRecovery = null;
                       _connectionError = null;
                     });
+                    unawaited(_refreshRecovery(includeSystem: false));
                   },
                 ),
                 Expanded(child: Column(
@@ -606,7 +767,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                     Text(_addingNewDevice ? '添加新录音卡' : '录音卡连接设置',
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
-                    Text(_addingNewDevice ? '搜索附近卡片并验证身份' : '账号 SN：${_selectedAccountDevice!.serialNumber}',
+                    Text(_addingNewDevice ? '搜索附近卡片并验证身份' : 'SN：${_selectedAccountDevice?.serialNumber ?? _selectedRecovery!.identity.serialNumber}',
                         style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                   ],
                 )),
@@ -740,12 +901,15 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                         final n = item.device.platformName.isNotEmpty
                             ? item.device.platformName
                             : item.advertisementData.advName;
-                        return n.trim().isNotEmpty;
+                        return n.trim().isNotEmpty && !_recoveryCandidates.any((c) =>
+                            c.identity.remoteId.toLowerCase() == item.device.remoteId.str.toLowerCase());
                       }).toList();
 
                       if (validResults.isEmpty) {
                         return ListView(children: [
                           _deviceSettings(devNotifier),
+                          _recoverySection(),
+                          if (_recoveryCandidates.isEmpty)
                           Padding(
                             padding: const EdgeInsets.all(24),
                             child: Column(
@@ -798,11 +962,12 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
 
                       return ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        itemCount: validResults.length + 1,
+                        itemCount: validResults.length + 2,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           if (index == 0) return _deviceSettings(devNotifier);
-                          final item = validResults[index - 1];
+                          if (index == 1) return _recoverySection();
+                          final item = validResults[index - 2];
                           final name = item.device.platformName.isNotEmpty
                               ? item.device.platformName
                               : item.advertisementData.advName;

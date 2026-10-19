@@ -5,6 +5,7 @@ import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../core/ble/recorder_authentication.dart';
+import '../core/ble/recorder_saved_identity.dart';
 import '../core/ble/recorder_connection_details.dart';
 import '../models/device_status.dart';
 
@@ -144,14 +145,22 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
 
   /// 连接指定的蓝牙外设
   Future<bool> connectDevice(BluetoothDevice device,
-      {RecorderAccountSession? accountSession}) async {
+      {RecorderAccountSession? accountSession,
+      RecorderRecoveryCandidate? recoveryCandidate}) async {
     await stopScan(); // 关键：连接前彻底停止扫描
     await switchDriverType(HardwareDeviceType.ainote6095Ble);
     final ok = await _factory.bleDriver
-        .connectDevice(device, accountSession: accountSession);
+        .connectDevice(device, accountSession: accountSession,
+            recoveryCandidate: recoveryCandidate);
     _updateStateFromDriver(_factory.activeDriver);
     return ok;
   }
+
+  /// 仅列出具有可靠本机身份或账号密钥对应关系的恢复候选。
+  Future<List<RecorderRecoveryCandidate>> recoveryCandidates({
+    RecorderAccountSession? accountSession, bool includeSystemDevices = true,
+  }) => _factory.bleDriver.recoveryCandidates(accountSession: accountSession,
+      includeSystemDevices: includeSystemDevices);
 
   /// 断开当前设备连接
   Future<void> disconnectDevice() async {

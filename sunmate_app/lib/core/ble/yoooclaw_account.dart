@@ -77,6 +77,22 @@ class OwnedRecorderBinding {
     await store.write(remoteId, protocol, encoded);
   }
 
+  /// 只比较当前 UUID 已有的本地 key，不恢复、不写入或导出 key。
+  Future<bool> matchesExistingKey(RecorderKeyStore store, String remoteId) async {
+    final secret = _secret;
+    if (secret == null) throw StateError('账号资料已关闭，请重新读取');
+    final encoded = await store.read(remoteId, protocol);
+    if (encoded == null) return false;
+    final local = RecorderCryptography.decode32(encoded);
+    try {
+      var difference = 0;
+      for (var i = 0; i < 32; i++) difference |= local[i] ^ secret[i];
+      return difference == 0;
+    } finally {
+      local.fillRange(0, local.length, 0);
+    }
+  }
+
   void clear() {
     _secret?.fillRange(0, _secret!.length, 0);
     _secret = null;
@@ -766,6 +782,15 @@ class YoooClawAccount {
         },
         hasRecoverableKey: hasRecoverableKey,
         newDeviceIdentity: newDeviceIdentity,
+        validateCurrent: () => ensureCurrent(serial),
+        matchesExistingKey: newDeviceIdentity != null ? null : (id, protocol, store) async {
+          ensureCurrent(serial);
+          final matches = _bindings.where((b) => b.matches(serial, protocol)).toList();
+          if (matches.length != 1) return false;
+          final same = await matches.single.matchesExistingKey(store, id);
+          ensureCurrent(serial);
+          return same;
+        },
         restoreKey: newDeviceIdentity != null
             ? null
             : (deviceId, protocol, detectedSerial, store) async {

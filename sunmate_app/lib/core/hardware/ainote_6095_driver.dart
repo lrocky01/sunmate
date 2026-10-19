@@ -8,6 +8,7 @@ import '../ble/ble_protocol.dart';
 import '../ble/ios_ble_connection.dart';
 import '../ble/recorder_connection_details.dart';
 import '../ble/recorder_authentication.dart';
+import '../ble/recorder_saved_identity.dart';
 import '../ble/yoooclaw_account.dart';
 import '../audio/opus_stream_receiver.dart';
 import 'hardware_device_driver.dart';
@@ -22,6 +23,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final _ios = IosBleConnection();
   final _audioReceiver = OpusStreamReceiver();
   final RecorderKeyStore _keyStore;
+  final RecorderIdentityStore _identityStore = RecorderIdentityStore();
+  final Future<List<BluetoothDevice>> Function() _systemDevices;
+  RecorderSavedIdentity? _recoveryIdentity;
   final ManufacturerVerifier? _verifier;
   final Duration connectionTimeout;
   final Duration cancellationTimeout;
@@ -84,10 +88,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   AiNote6095Driver({
     RecorderKeyStore? keyStore,
     ManufacturerVerifier? verifier,
+    Future<List<BluetoothDevice>> Function()? systemDevices,
     this.connectionTimeout = const Duration(seconds: 90),
     this.cancellationTimeout = const Duration(seconds: 5),
     this.authenticationTimeout = const Duration(seconds: 120),
   })  : _keyStore = keyStore ?? SecureRecorderKeyStore(),
+        _systemDevices = systemDevices ?? (() => FlutterBluePlus.systemDevices([
+          Guid('1812'), Guid(BleConstants.serviceOpus), Guid(BleConstants.serviceAiNote)
+        ])),
         _verifier = verifier {
     _initialization = _loadPreferences();
     _receiverSub = _audioReceiver.audioStream.listen((packet) {
@@ -151,7 +159,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
   String get diagnosticText => [
-        'SunMate 1.0.23+24',
+        'SunMate 1.0.24+25',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备匹配 SN: $_serialNumber；来源: $_serialSource',
@@ -207,9 +215,128 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     return connectDevice(BluetoothDevice.fromId(id), isAutoReconnect: true);
   }
 
+  /// 系统已连接/本机保存的身份仅作为候选；仍须建立本App连接并验证AES。
+  Future<List<RecorderRecoveryCandidate>> recoveryCandidates({
+    RecorderAccountSession? accountSession,
+    bool includeSystemDevices = true,
+  }) async {
+    await _initialization;
+    if (_disposed || accountSession?.newDeviceIdentity != null) return [];
+    accountSession?.validateCurrent?.call();
+    final saved = await _identityStore.readAll();
+    var system = <BluetoothDevice>[];
+    if (includeSystemDevices) {
+      try {
+        system = await _systemDevices().timeout(const Duration(seconds: 5));
+      } catch (_) {
+        if (saved.isEmpty) throw StateError('暂时无法读取系统已连接设备，请重新读取；无需解绑');
+      }
+    }
+    if (_disposed) return [];
+    accountSession?.validateCurrent?.call();
+    final systemById = {
+      for (final d in system) d.remoteId.str.toLowerCase(): d,
+    };
+    if (systemById.length > 64) throw StateError('系统设备候选过多，未自动匹配');
+    final found = <String, RecorderRecoveryCandidate>{};
+    for (final identity in saved) {
+      if (accountSession != null &&
+          identity.serialNumber != accountSession.serialNumber)
+        continue;
+      final key = await _keyStore.read(identity.remoteId, identity.protocol);
+      if (key == null) continue;
+      await _authorizeRecovery(identity, accountSession);
+      found[identity.remoteId.toLowerCase()] = RecorderRecoveryCandidate(
+        identity,
+        systemConnected: systemById.containsKey(
+          identity.remoteId.toLowerCase(),
+        ),
+      );
+    }
+    // 兼容旧版仅保存了Keychain key的情况：必须与所选账号key唯一匹配。
+    if (accountSession != null &&
+        accountSession.hasRecoverableKey &&
+        accountSession.matchesExistingKey != null) {
+      for (final device in systemById.values) {
+        final id = device.remoteId.str;
+        if (found.containsKey(id.toLowerCase())) continue;
+        for (final protocol in RecorderProtocol.values) {
+          if (!await accountSession.matchesExistingKey!(
+            id,
+            protocol,
+            _keyStore,
+          ))
+            continue;
+          final identity = RecorderSavedIdentity(
+            remoteId: id,
+            serialNumber: accountSession.serialNumber,
+            protocol: protocol,
+            deviceName:
+                device.platformName.isNotEmpty &&
+                    device.platformName.length <= 64
+                ? device.platformName
+                : '录音卡',
+          );
+          final known = saved.where(
+            (s) => s.remoteId.toLowerCase() == id.toLowerCase(),
+          );
+          if (known.isNotEmpty && !known.single.sameDevice(identity)) {
+            throw StateError('系统设备与本机已存身份冲突，未继续匹配');
+          }
+          if (found.containsKey(id.toLowerCase()))
+            throw StateError('同一系统设备的协议匹配不唯一');
+          found[id.toLowerCase()] = RecorderRecoveryCandidate(
+            identity,
+            systemConnected: true,
+          );
+        }
+      }
+    }
+    accountSession?.validateCurrent?.call();
+    final grouped = <String, int>{};
+    for (final candidate in found.values) {
+      final sn = candidate.identity.serialNumber;
+      grouped[sn] = (grouped[sn] ?? 0) + 1;
+    }
+    if (grouped.values.any((n) => n > 1)) throw StateError('同一SN有多个恢复候选，未自动选择');
+    return _disposed ? [] : List.unmodifiable(found.values);
+  }
+
+  Future<void> _authorizeRecovery(
+    RecorderSavedIdentity identity,
+    RecorderAccountSession? session,
+  ) async {
+    session?.validateCurrent?.call();
+    if (session?.newDeviceIdentity != null ||
+        (session != null && session.serialNumber != identity.serialNumber)) {
+      throw StateError('恢复身份与所选账号设备不匹配');
+    }
+    final key = await _keyStore.read(identity.remoteId, identity.protocol);
+    if (key == null) throw StateError('该设备没有本机密钥，未作为已存身份接入');
+    final decoded = RecorderCryptography.decode32(key);
+    decoded.fillRange(0, decoded.length, 0);
+    final saved = (await _identityStore.readAll())
+        .where(
+          (r) => r.remoteId.toLowerCase() == identity.remoteId.toLowerCase(),
+        )
+        .toList();
+    if (saved.isNotEmpty && !saved.single.sameDevice(identity)) {
+      throw StateError('已保存的设备身份不匹配，未覆盖');
+    }
+    if (saved.isEmpty || (session?.hasRecoverableKey ?? false)) {
+      final match = session?.matchesExistingKey;
+      if (match == null ||
+          !await match(identity.remoteId, identity.protocol, _keyStore)) {
+        throw StateError('本机密钥与所选账号恢复资料不匹配，未覆盖或重新绑定');
+      }
+    }
+    session?.validateCurrent?.call();
+  }
+
   /// 同一次连接只允许一个流程；自动重连与点击连接不能互相覆盖。
   Future<bool> connectDevice(BluetoothDevice device,
-      {bool isAutoReconnect = false, RecorderAccountSession? accountSession}) {
+      {bool isAutoReconnect = false, RecorderAccountSession? accountSession,
+      RecorderRecoveryCandidate? recoveryCandidate}) {
     if (_disposed) return Future.value(false);
     if (_restoringIdentity || _disconnectOperation != null)
       return Future.value(false);
@@ -221,7 +348,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _connectingId = device.remoteId.str;
     _cancelReconnect = false;
     final operation =
-        _connectAccountDevice(device, isAutoReconnect, accountSession);
+        _connectAccountDevice(device, isAutoReconnect, accountSession, recoveryCandidate);
     _connectionOperation = operation;
     unawaited(operation.whenComplete(() {
       if (_connectionOperation == operation) {
@@ -234,10 +361,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   }
 
   Future<bool> _connectAccountDevice(BluetoothDevice device, bool automatic,
-      RecorderAccountSession? session) async {
+      RecorderAccountSession? session, RecorderRecoveryCandidate? recovery) async {
     final expectedGeneration = _generation + 1;
     final connected =
-        await _connectDevice(device, automatic, accountSession: session);
+        await _connectDevice(device, automatic, accountSession: session, recovery: recovery);
     if (connected ||
         session == null ||
         _cancelReconnect ||
@@ -260,6 +387,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
 
   Future<bool> _connectDevice(BluetoothDevice device, bool automatic,
       {RecorderAccountSession? accountSession,
+      RecorderRecoveryCandidate? recovery,
       bool retainDiagnostics = false}) async {
     final generation = ++_generation;
     final cancellation = Completer<void>();
@@ -294,6 +422,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _sawManufacturerChallenge = false;
       _needsIdentityReconnect = false;
       _activeAccountSession = accountSession;
+      _recoveryIdentity = recovery?.identity;
       _authentication?.cancel();
       _eventWork = Future.value();
       _voiceSession = null;
@@ -308,6 +437,18 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _batteryLevel = 0;
       _phase = '准备连接';
       _ready = Completer<bool>();
+      if (recovery != null) {
+        if (device.remoteId.str.toLowerCase() != recovery.identity.remoteId.toLowerCase()) {
+          throw StateError('恢复候选UUID不匹配');
+        }
+        await Future.any<void>([
+          _authorizeRecovery(recovery.identity, accountSession),
+          cancellation.future.then<void>((_) => throw StateError('连接已取消')),
+        ]).timeout(connectionTimeout);
+        _checkGeneration(generation);
+        _serialNumber = recovery.identity.serialNumber;
+        _serialSource = '本机密钥身份候选（待身份挑战验证）';
+      }
       if (newIdentity != null &&
           (newIdentity.remoteId.toLowerCase() != device.remoteId.str.toLowerCase() ||
               !newIdentity.isFresh(selectedAt) ||
@@ -421,6 +562,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (profile == null)
         throw StateError('未找到唯一完整的已知业务 profile；保留 GATT 日志，不向未知或 OTA 特征写入');
       _profile = profile;
+      if (recovery != null && profile.protocol != recovery.identity.protocol) {
+        throw StateError('实际GATT与恢复候选协议不匹配');
+      }
       if (newIdentity != null && profile.protocol != newIdentity.protocol) {
         throw const OfficialAccountException('实际 GATT 与首次绑定的广播协议不一致');
       }
@@ -450,6 +594,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         protocol: profile.protocol,
         deviceId: device.remoteId.str,
         store: _keyStore,
+        onKeySaved: (serial) async {
+          _checkGeneration(generation);
+          if (serial != _serialNumber) throw StateError('密钥已保存但SN不匹配，未记录恢复身份');
+          await _identityStore.save(RecorderSavedIdentity(remoteId: device.remoteId.str,
+              serialNumber: serial, protocol: profile.protocol,
+              deviceName: _deviceName.length <= 64 ? _deviceName : '录音卡'));
+          _checkGeneration(generation);
+        },
         verifier: accountSession == null
             ? _verifier
             : ({required checkContent, required mac, required sn}) async {
@@ -475,6 +627,13 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       );
       _hasSharedKey = await _authentication!.loadKey();
       _checkGeneration(generation);
+      if (recovery != null) {
+        await _authorizeRecovery(recovery.identity, accountSession);
+        _checkGeneration(generation);
+        await _identityStore.save(recovery.identity);
+        _checkGeneration(generation);
+        _log('恢复候选与本机密钥、SN及GATT协议匹配；仍等待当前真实身份挑战');
+      }
       if (newIdentity != null && _hasSharedKey) {
         throw const OfficialAccountException('本机已有业务密钥，请返回使用本机已验证身份重连；未重新协商');
       }
@@ -576,9 +735,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       return _isConnected && isLinkConnected;
     } catch (error) {
       if (generation != _generation || _disposed) return false;
-      lastErrorMessage = error is TimeoutException && _phase == '系统连接与授权'
+      final connectionError = error is TimeoutException && _phase == '系统连接与授权'
           ? '系统连接在 ${connectionTimeout.inSeconds} 秒内未完成，已请求取消；请关闭其它设备的蓝牙后重试'
           : '$error';
+      lastErrorMessage = connectionError;
       _phase = '连接未完成';
       _log('连接错误: $lastErrorMessage');
       // pending 连接即使 isConnected=false 也必须请求取消。
@@ -588,6 +748,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       if (generation != _generation || _disposed) return false;
       await _clearSubscriptions();
       if (generation != _generation || _disposed) return false;
+      lastErrorMessage = connectionError;
       _isConnected = false;
       _linkEstablished = false;
       _finishWaiting(false);
@@ -712,6 +873,9 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     if (params['sn'] is String &&
         RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(params['sn'] as String)) {
       final reported = (params['sn'] as String).toUpperCase();
+      if (_recoveryIdentity != null && reported != _recoveryIdentity!.serialNumber) {
+        throw const OfficialAccountException('设备事件SN与恢复身份不一致');
+      }
       if (_advertisedSerial != null && reported != _advertisedSerial) {
         throw const OfficialAccountException('设备事件 SN 与本次广播 SN 不一致，未继续鉴权');
       }
@@ -825,6 +989,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _isConnected = true;
     if (_advertisedSerial != null && _serialSource == '本次设备广播（待身份挑战验证）') {
       _serialSource = '本次设备广播（身份挑战已验证）';
+    } else if (_recoveryIdentity != null) {
+      _serialSource = '本机密钥身份（身份挑战已验证）';
     }
     _phase = '设备业务已验证';
     lastErrorMessage = null;
@@ -878,11 +1044,28 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<void> _rememberVerifiedDevice() async {
     final device = _device;
     if (device == null) return;
+    final generation = _generation;
+    final serial = _serialNumber;
+    final name = _deviceName;
+    final protocol = _profile?.protocol;
     final prefs = await SharedPreferences.getInstance();
+    if (generation != _generation || _disposed) return;
     await prefs.setString(_lastIdKey, device.remoteId.str);
-    await prefs.setString(_lastNameKey, _deviceName);
-    if (_serialNumber != '--') await prefs.setString(_lastSnKey, _serialNumber);
+    if (generation != _generation || _disposed) return;
+    await prefs.setString(_lastNameKey, name);
+    if (generation != _generation || _disposed) return;
+    if (serial != '--') await prefs.setString(_lastSnKey, serial);
+    if (generation != _generation || _disposed) return;
     _hasVerifiedDevice = true;
+    if (protocol != null && RegExp(r'^[A-Z]{2}[0-9]{14}$').hasMatch(serial)) {
+      try {
+        await _identityStore.save(RecorderSavedIdentity(remoteId: device.remoteId.str,
+            serialNumber: serial, deviceName: name.length <= 64 ? name : '录音卡',
+            protocol: protocol, previouslyVerified: true));
+      } catch (_) {
+        _log('设备已验证，但保存重连路由未完成；业务密钥保持');
+      }
+    }
   }
 
   bool canRestoreBinding(OwnedRecorderBinding binding) =>

@@ -107,8 +107,14 @@ class RecorderAccountSession {
   final RecorderScanIdentity? newDeviceIdentity;
   final Future<bool> Function(String deviceId, RecorderProtocol protocol,
       String detectedSerial, RecorderKeyStore store)? restoreKey;
+  /// 仅本机比较所选账号与该UUID已有key，不恢复或写入key。
+  final Future<bool> Function(String deviceId, RecorderProtocol protocol,
+      RecorderKeyStore store)? matchesExistingKey;
+  /// 系统候选异步查询和接入前后均需检查账号代次。
+  final void Function()? validateCurrent;
   RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
-      {this.restoreKey, this.hasRecoverableKey = false, this.newDeviceIdentity});
+      {this.restoreKey, this.hasRecoverableKey = false, this.newDeviceIdentity,
+      this.matchesExistingKey, this.validateCurrent});
 }
 
 enum RecorderAuthenticationState {
@@ -127,6 +133,8 @@ class RecorderAuthentication {
   final RecorderKeyStore store;
   final ManufacturerVerifier? verifier;
   final PairingCommitter? committer;
+  /// 本地key落盘后记录待验证路由；不接收或复制密钥值。
+  final Future<void> Function(String serialNumber)? onKeySaved;
   final RecorderCryptography _crypto;
   RecorderAuthenticationState state = RecorderAuthenticationState.idle;
   SimpleKeyPair? _phoneKey;
@@ -141,6 +149,7 @@ class RecorderAuthentication {
     required this.store,
     this.verifier,
     this.committer,
+    this.onKeySaved,
     RecorderCryptography? cryptography,
   }) : _crypto = cryptography ?? RecorderCryptography();
 
@@ -225,6 +234,8 @@ class RecorderAuthentication {
     _checkActive();
     _sharedSecret = secret;
     _phoneKey = null;
+    await onKeySaved?.call(_verifiedSn!);
+    _checkActive();
     final commit = committer;
     if (commit != null) {
       await commit(

@@ -12,12 +12,14 @@ class RecorderAccountSheet extends ConsumerStatefulWidget {
   final VoidCallback? onAddDevice;
   final bool closeAccountOnDispose;
   final Future<bool> Function()? onReconnectVerified;
+  final Widget? savedIdentitySection;
   const RecorderAccountSheet(
       {super.key,
       this.account,
       this.onSelectDevice,
       this.onAddDevice,
       this.onReconnectVerified,
+      this.savedIdentitySection,
       this.closeAccountOnDispose = true});
   @override
   ConsumerState<RecorderAccountSheet> createState() =>
@@ -225,6 +227,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                 if (widget.onSelectDevice == null)
                   Text('当前录音卡 SN：${notifier.detectedBleSerial}'),
                 const SizedBox(height: 12),
+                if (widget.savedIdentitySection != null) widget.savedIdentitySection!,
                 if (widget.onReconnectVerified != null) ...[
                     OutlinedButton(
                         onPressed: _busy

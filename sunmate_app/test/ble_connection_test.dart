@@ -14,6 +14,7 @@ import 'package:sunmate_app/core/ble/ble_constants.dart';
 import 'package:sunmate_app/core/hardware/ainote_6095_driver.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
 import 'package:sunmate_app/core/ble/recorder_authentication.dart';
+import 'package:sunmate_app/core/ble/recorder_saved_identity.dart';
 import 'yoooclaw_account_test.dart' show record, scanIdentity, AccountHttpAdapter, response, MemoryOfficialSessionStore;
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
@@ -27,6 +28,13 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
   final written = StreamController<BmCharacteristicData>.broadcast();
   final mtus = StreamController<BmMtuChangedResponse>.broadcast();
   final writes = <BmWriteCharacteristicRequest>[];
+  List<BmBluetoothDevice> systemDevices = [];
+  BmSystemDevicesRequest? systemLookup;
+  @override
+  Future<BmDevicesList> getSystemDevices(BmSystemDevicesRequest request) async {
+    systemLookup = request;
+    return BmDevicesList(devices: systemDevices);
+  }
   int connectCount = 0;
   bool otaOnly = false;
   bool rejectNotify = false;
@@ -335,6 +343,8 @@ final class TestBlePlatform extends FlutterBluePlusPlatform {
       [0xaa, 0x55, 0x30, 0, 0, ...utf8.encode(jsonEncode(value))]);
 
   void reset() {
+    systemDevices = [];
+    systemLookup = null;
     writes.clear();
     authenticate = false;
     firstBinding = false;
@@ -436,6 +446,11 @@ void main() {
         ]));
         expect(keys.writes, 1);
         expect(base64Decode(keys.value!), platform.peerSecret);
+        await Future<void>.delayed(Duration.zero);
+        final saved = (await RecorderIdentityStore().readAll()).single;
+        expect(saved.remoteId, device.remoteId.str);
+        expect(saved.serialNumber, 'AB00000000000001');
+        expect(saved.previouslyVerified, outcome == 'success');
       } else {
         expect(paths, hasLength(2));
         expect(keys.writes, 0);
