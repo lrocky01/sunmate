@@ -29,4 +29,10 @@
 - `flutter analyze --no-pub --no-fatal-infos`：退出0，无error/warning，11条既有弃用info。
 - `git diff --check`通过；版本与首页/设置/诊断文字一致。HAL驱动仅改诊断版本文本，私有端点和解绑行为未改。
 
-CI运行和下载核验结果完成后记入此节。IPA沿用项目的无签名构建方式，安装前需要个人自签；不会由本次任务直接改动手机或执行解绑。
+- 源码提交`db28612346fead007d4206561133ffd9af43ba78`已推main；[Actions #39](https://github.com/lrocky01/sunmate/actions/runs/39189810881)的检查、原生编译、打包和上传全部成功，artifact `12159208734`。
+- 已下载`build_output/SunMate-1.0.23+24.ipa`，8,610,714字节；SHA-256 `1a651c56df5cdeddbac0a6ef18fcda7080acd4919bbda0d5821074c92c44645b`。
+- Artifact ZIP SHA-256 `4a7a4e6f4d018c09fa75ae32751b220d49f7dadc4b7ecdcfaada7fcd5bec30e3`，与GitHub摘要一致；IPA全成员CRC检查通过。
+- 包内Info.plist为1.0.23/Build24、bundle `com.sunmate.app`；编译后的App含isIos及身份挑战协议标记、诊断和首页新版本、原有登录保存/独立归档条目。首页完整中英文文字按UTF-16LE编码核验，未把ASCII子串未命中误当版本失败。原生BLE、安全存储、ANCS及蓝牙/麦克风用途组件均存在。
+- 整数1与平台隔离由源码/回归验证，IPA以构建提交、摘要、版本及组件交叉核验，不把二进制字符串存在本身当作已完成实体SMP。
+
+Runner仍为无签名测试包，沿用此前个人自签方式覆盖安装。本次没有直接改动手机、清系统配对、调用真实解绑或覆盖旧密钥；实体稳定连接和录音仍需用户安装本版后验收。
