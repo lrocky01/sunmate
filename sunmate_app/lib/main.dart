@@ -5,6 +5,7 @@ import 'views/chat_page.dart';
 import 'views/meeting_page.dart';
 import 'views/timeline_page.dart';
 import 'views/settings_page.dart';
+import 'views/recorder_connection_lifecycle.dart';
 
 void main() {
   runApp(const ProviderScope(child: SunMateApp()));
@@ -29,7 +30,7 @@ class SunMateApp extends StatelessWidget {
           elevation: 0,
         ),
       ),
-      home: const RootNavigationContainer(),
+      home: const RecorderConnectionLifecycle(child: RootNavigationContainer()),
     );
   }
 }

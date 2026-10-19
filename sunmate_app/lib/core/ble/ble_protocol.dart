@@ -228,7 +228,45 @@ class RecorderProfile {
   }
 }
 
-/// 只接受明确的官方 JSON 帧边界，不在任意二进制数据内搜索关键字。
+enum TelinkRecordingKind { realtime, long }
+
+/// Telink DEVICE_EVENT 的独立二进制事件，不作为 JSON 或鉴权回执。
+class TelinkRecordingEvent {
+  final bool started;
+  final TelinkRecordingKind? kind;
+  final int? sessionId;
+  const TelinkRecordingEvent._(this.started, this.kind, this.sessionId);
+
+  static TelinkRecordingEvent? decode(List<int> packet) {
+    if (packet.length < 3 ||
+        packet[0] != 0xaa ||
+        packet[1] != 0x55 ||
+        (packet[2] != 1 && packet[2] != 2)) return null;
+    final started = packet[2] == 1;
+    if (packet.any((b) => b < 0 || b > 255) ||
+        (started
+            ? packet.length != 12
+            : packet.length != 3 && packet.length != 4) ||
+        (packet.length >= 4 && packet[3] != 0 && packet[3] != 1)) {
+      throw const FormatException('Telink录音事件长度或类型无效');
+    }
+    final kind = packet.length == 3
+        ? null
+        : packet[3] == 1
+            ? TelinkRecordingKind.long
+            : TelinkRecordingKind.realtime;
+    final session = started
+        ? ByteData.sublistView(Uint8List.fromList(packet))
+            .getInt64(4, Endian.big)
+        : null;
+    if (session != null && session <= 0) {
+      throw const FormatException('Telink录音会话无效');
+    }
+    return TelinkRecordingEvent._(started, kind, session);
+  }
+}
+
+/// 只接受明确的官方 JSON 帧边界；二进制录音由独立解码器处理。
 class RecorderEventDecoder {
   final RecorderProtocol protocol;
   final List<int> _pending = [];

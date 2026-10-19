@@ -9,12 +9,14 @@ import '../ble/ios_ble_connection.dart';
 import '../ble/recorder_connection_details.dart';
 import '../ble/recorder_authentication.dart';
 import '../ble/recorder_saved_identity.dart';
+import '../ble/recorder_portable_backup.dart';
 import '../ble/yoooclaw_account.dart';
 import '../audio/opus_stream_receiver.dart';
 import 'hardware_device_driver.dart';
+import 'recorder_hardware_settings.dart';
 
 /// 保留 HAL 驱动入口，在完整 GATT 匹配后选择官方协议。
-class AiNote6095Driver implements HardwareDeviceDriver {
+class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   static const _lastIdKey = 'sunmate_verified_ble_device_id_v2';
   static const _lastNameKey = 'sunmate_verified_ble_device_name_v2';
   static const _lastSnKey = 'sunmate_verified_ble_device_sn_v2';
@@ -24,12 +26,28 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   final _audioReceiver = OpusStreamReceiver();
   final RecorderKeyStore _keyStore;
   final RecorderIdentityStore _identityStore = RecorderIdentityStore();
+  late final RecorderBackupService backupService = RecorderBackupService(
+      keys: _keyStore, identities: _identityStore);
   final Future<List<BluetoothDevice>> Function() _systemDevices;
   RecorderSavedIdentity? _recoveryIdentity;
   final ManufacturerVerifier? _verifier;
   final Duration connectionTimeout;
   final Duration cancellationTimeout;
   final Duration authenticationTimeout;
+  final Duration settingsTimeout;
+  late final RecorderSettingsController _settings = RecorderSettingsController(
+      isReady: () => !_disposed && _isConnected && _identityVerified &&
+          _channelsReady && isLinkConnected &&
+          _profile?.protocol == RecorderProtocol.telink,
+      send: (method, params) async {
+        if (!_isConnected || !_identityVerified || !_channelsReady ||
+            _profile?.protocol != RecorderProtocol.telink) {
+          throw StateError('设备设置需要当前连接真实身份验证');
+        }
+        await _sendJson(BleJsonRpc.request(method, params), method);
+      },
+      onChanged: () { if (!_disposed) _stateChanges.add(null); },
+      timeout: settingsTimeout);
   RecorderAuthentication? _authentication;
   RecorderAccountSession? _activeAccountSession;
   int? _nativePeripheralState;
@@ -46,6 +64,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool _needsIdentityReconnect = false;
   bool _cancelReconnect = false;
   int? _voiceSession;
+  int? _binaryRecordingSession;
+  TelinkRecordingKind? _binaryRecordingKind;
+  int _audioNotificationCount = 0;
+  int _audioReceivedBytes = 0;
+  int _audioOutsideSession = 0;
+  int _lastAudioFrameCount = 0;
   final _buttonEvents = StreamController<DeviceButtonEvent>.broadcast();
   final _audioPackets = StreamController<AudioDataPacket>.broadcast();
   final _stateChanges = StreamController<void>.broadcast();
@@ -92,6 +116,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     this.connectionTimeout = const Duration(seconds: 90),
     this.cancellationTimeout = const Duration(seconds: 5),
     this.authenticationTimeout = const Duration(seconds: 120),
+    this.settingsTimeout = const Duration(seconds: 5),
   })  : _keyStore = keyStore ?? SecureRecorderKeyStore(),
         _systemDevices = systemDevices ?? (() => FlutterBluePlus.systemDevices([
           Guid('1812'), Guid(BleConstants.serviceOpus), Guid(BleConstants.serviceAiNote)
@@ -149,6 +174,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   bool get isRecording => _isRecording;
   @override
   bool get isPaused => _isPaused;
+  @override
+  RecorderHardwareSettings get hardwareSettings => _settings.snapshot;
+  @override
+  Future<bool> refreshHardwareSettings() => _settings.refresh();
+  @override
+  Future<bool> setMeetingRecordingClicks(int count) => _settings.setClicks(count);
+  @override
+  Future<bool> setMeetingRecordingLed(bool enabled) => _settings.setLed(enabled);
   Uint8List? get lastRecordedBytes => _lastRecordedBytes;
   @override
   Stream<DeviceButtonEvent> get buttonEvents => _buttonEvents.stream;
@@ -158,8 +191,10 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Stream<void> get stateChanges => _stateChanges.stream;
   Stream<String> get logStream => _logs.stream;
   List<String> get connectionLogs => List.unmodifiable(_connectionLogs);
+  String get audioStatistics =>
+      '通知=$_audioNotificationCount；接收字节=$_audioReceivedBytes；会话外忽略=$_audioOutsideSession；最近完整录音帧=$_lastAudioFrameCount';
   String get diagnosticText => [
-        'SunMate 1.0.24+25',
+        'SunMate 1.0.25+26',
         '当前阶段: $_phase',
         '设备: $_deviceName',
         '设备匹配 SN: $_serialNumber；来源: $_serialSource',
@@ -167,6 +202,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
         '链路: $isLinkConnected; 业务就绪: $_isConnected; 通知授权属性: ${_ancsAuthorized ?? "未知"}',
         '原生状态: ${connectionDetails.nativeStateLabel}; 系统已连接服务匹配: ${_systemConnectedMatch ?? "未查询"}; 广播可连接: ${_advertisementConnectable ?? "未知"}',
         '最近错误: ${lastErrorMessage ?? "无"}',
+        '音频统计: $audioStatistics',
+        '会议录音设置: 点击=${hardwareSettings.meetingClicks ?? "未读取"}；灯=${hardwareSettings.meetingLed ?? "未读取"}；回读确认=${hardwareSettings.confirmed}；状态=${hardwareSettings.message ?? "未读取"}',
         ..._connectionLogs,
       ].join('\n');
 
@@ -213,6 +250,39 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _reportedSerials[id] = sn;
     }
     return connectDevice(BluetoothDevice.fromId(id), isAutoReconnect: true);
+  }
+
+  Future<RecorderSavedIdentity?> _verifiedSavedIdentity() async {
+    await _initialization;
+    if (_disposed) return null;
+    final prefs = await SharedPreferences.getInstance();
+    final id = prefs.getString(_lastIdKey);
+    final sn = prefs.getString(_lastSnKey);
+    if (id == null || sn == null) return null;
+    final matches = (await _identityStore.readAll()).where((r) =>
+        r.remoteId.toLowerCase() == id.toLowerCase() &&
+        r.serialNumber == sn && r.previouslyVerified).toList();
+    if (matches.length != 1) return null;
+    final identity = matches.single;
+    final key = await _keyStore.read(identity.remoteId, identity.protocol);
+    if (key == null) return null;
+    final decoded = RecorderCryptography.decode32(key);
+    decoded.fillRange(0, decoded.length, 0);
+    return _disposed ? null : identity;
+  }
+
+  /// 启动自动连接仅使用已经过AES的身份和本机key，不恢复账号或首次绑定。
+  Future<bool> hasAutomaticReconnectMaterial() async =>
+      await _verifiedSavedIdentity() != null;
+
+  Future<bool> reconnectVerifiedDeviceAutomatically(
+      {required bool Function() shouldConnect}) async {
+    final identity = await _verifiedSavedIdentity();
+    if (identity == null || !shouldConnect()) return false;
+    return connectDevice(BluetoothDevice.fromId(identity.remoteId),
+        isAutoReconnect: true,
+        recoveryCandidate: RecorderRecoveryCandidate(identity,
+            systemConnected: false));
   }
 
   /// 系统已连接/本机保存的身份仅作为候选；仍须建立本App连接并验证AES。
@@ -417,6 +487,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _isConnected = false;
       _channelsReady = false;
       _identityVerified = false;
+      _settings.reset();
       _hasSharedKey = false;
       _sawAuthenticationEvent = false;
       _sawManufacturerChallenge = false;
@@ -426,6 +497,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _authentication?.cancel();
       _eventWork = Future.value();
       _voiceSession = null;
+      _binaryRecordingSession = null;
+      _binaryRecordingKind = null;
+      _audioNotificationCount = 0;
+      _audioReceivedBytes = 0;
+      _audioOutsideSession = 0;
+      _lastAudioFrameCount = 0;
       _audioReceiver.cancel();
       _ancsAuthorized = null;
       _nativePeripheralState = null;
@@ -509,6 +586,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           _isPaused = false;
           _channelsReady = false;
           _identityVerified = false;
+          _settings.reset();
           _authentication?.cancel();
           _cancelVoice();
           _decoder?.reset();
@@ -588,6 +666,21 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           accountSession != null &&
           _serialNumber != accountSession.serialNumber) {
         throw const OfficialAccountException('设备 SN 与所选账号设备不一致，未继续鉴权');
+      }
+      if (accountSession?.isOfflineBackup ?? false) {
+        // 真实广播SN和完整GATT先匹配，再映射新手机UUID；不复用旧手机UUID。
+        if (_advertisedSerial == null || scannedSerials.length != 1 ||
+            accountSession!.restoreKey == null ||
+            !await accountSession.restoreKey!(device.remoteId.str, profile.protocol,
+                _advertisedSerial!, _keyStore)) {
+          throw StateError('备份未能匹配当前广播SN及GATT，未继续鉴权');
+        }
+        _checkGeneration(generation);
+        await _identityStore.save(RecorderSavedIdentity(remoteId: device.remoteId.str,
+            serialNumber: _advertisedSerial!, protocol: profile.protocol,
+            deviceName: _deviceName.length <= 64 ? _deviceName : '录音卡'));
+        _checkGeneration(generation);
+        _log('加密备份已匹配本次广播SN和GATT；本机材料已保存，仍待真实AES验证');
       }
       _decoder = RecorderEventDecoder(profile.protocol);
       _authentication = RecorderAuthentication(
@@ -671,15 +764,24 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _checkGeneration(generation);
       _log('设备事件 CCCD 已确认');
       _subscriptions.add(audio.onValueReceived.listen((bytes) {
-        if (generation != _generation || !_isConnected) return;
-        if (_profile?.protocol != RecorderProtocol.telink ||
-            _voiceSession == null) return;
-        try {
-          _audioReceiver.feedBlePacket(Uint8List.fromList(bytes));
-        } on FormatException {
-          _cancelVoice();
-          _log('实时音频分帧失败，已取消该段转写');
-        }
+        if (generation != _generation) return;
+        final packet = Uint8List.fromList(bytes);
+        // 与事件共用队列，开始事件、首包和结束事件即使同一轮到达也不乱序。
+        _queueDeviceWork(generation, () {
+          if (!_isConnected || _profile?.protocol != RecorderProtocol.telink) return;
+          _audioNotificationCount++;
+          _audioReceivedBytes += packet.length;
+          if (_voiceSession == null) {
+            _audioOutsideSession++;
+            return;
+          }
+          try {
+            _audioReceiver.feedBlePacket(packet);
+          } on FormatException {
+            _cancelVoice();
+            _log('实时音频分帧失败，已取消该段转写');
+          }
+        });
       }));
       await audio.setNotifyValue(true, timeout: 90);
       _checkGeneration(generation);
@@ -829,6 +931,12 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     if (_disposed) return;
     _log('RX 设备事件 bytes=${bytes.length}');
     try {
+      final recording = _profile?.protocol == RecorderProtocol.telink
+          ? TelinkRecordingEvent.decode(bytes) : null;
+      if (recording != null) {
+        _queueDeviceWork(_generation, () => _handleBinaryRecording(recording));
+        return;
+      }
       final message = _decoder?.feed(bytes);
       if (message == null) return;
       final method = message['method'] as String;
@@ -842,27 +950,33 @@ class AiNote6095Driver implements HardwareDeviceDriver {
           ? Map<String, dynamic>.from(message['params'] as Map)
           : <String, dynamic>{};
       final generation = _generation;
-      _eventWork = _eventWork.then((_) async {
-        if (generation != _generation || _disposed) return;
-        await _handleMessage(method, safeMethod, params, generation);
-      }).catchError((Object error) {
-        if (generation != _generation || _disposed) return;
-        _isConnected = false;
-        _identityVerified = false;
-        _authentication?.cancel();
-        _cancelVoice();
-        _phase = '业务鉴权未完成';
-        lastErrorMessage = _authentication?.verifier == null && !_hasSharedKey
-            ? '需要自己的官方账号绑定材料或合法厂商验机接口；未发送假凭证'
-            : error is OfficialAccountException
-                ? error.message
-                : '业务鉴权失败或设备材料无效；未报告连接成功';
-        _log(lastErrorMessage!);
-        _finishWaiting(false);
-      });
+      _queueDeviceWork(generation,
+          () => _handleMessage(method, safeMethod, params, generation));
     } on FormatException {
       _log('设备事件帧无效或格式不支持；未将内容当作鉴权回执');
     }
+  }
+
+  void _queueDeviceWork(int generation, FutureOr<void> Function() work) {
+    _eventWork = _eventWork.then((_) async {
+      if (generation != _generation || _disposed) return;
+      await work();
+    }).catchError((Object error) {
+      if (generation != _generation || _disposed) return;
+      _isConnected = false;
+      _identityVerified = false;
+      _settings.reset();
+      _authentication?.cancel();
+      _cancelVoice();
+      _phase = '业务鉴权未完成';
+      lastErrorMessage = _authentication?.verifier == null && !_hasSharedKey
+          ? '需要自己的官方账号绑定材料或合法厂商验机接口；未发送假凭证'
+          : error is OfficialAccountException
+              ? error.message
+              : '业务鉴权失败或设备材料无效；未报告连接成功';
+      _log(lastErrorMessage!);
+      _finishWaiting(false);
+    });
   }
 
   Future<void> _handleMessage(String method, String safeMethod,
@@ -957,6 +1071,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       final details = RecorderFailureSummary.describe(params);
       lastErrorMessage = '设备报告 $safeMethod 失败；拒绝详情（安全摘要）：$details；不自动清除绑定';
       _phase = '业务验证失败';
+      _settings.reset();
       _log(lastErrorMessage!);
       _finishWaiting(false);
     } else if (method == 'pairingResult' && params['success'] == true) {
@@ -977,6 +1092,14 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       final battery = params['battery'];
       final level = battery is Map ? battery['level'] : battery;
       if (level is int && level >= 0 && level <= 100) _batteryLevel = level;
+      _settings.acceptStatus(params);
+      if (_voiceSession != null || _binaryRecordingSession != null) {
+        _settings.acceptRecording(true);
+      }
+    } else if (method == 'reportCapabilities') {
+      _settings.acceptCapabilities(params);
+    } else if (method == 'reportUserSettings') {
+      _settings.acceptSettings(params);
     }
     _stateChanges.add(null);
   }
@@ -998,6 +1121,51 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     _finishWaiting(true);
     unawaited(_rememberVerifiedDevice());
     unawaited(syncTime());
+    // 设置读取失败不影响已完成的AES连接；只读，不自动改卡片配置。
+    if (_profile?.protocol == RecorderProtocol.telink) {
+      unawaited(_settings.refresh());
+    }
+  }
+
+  void _handleBinaryRecording(TelinkRecordingEvent event) {
+    if (!_isConnected || !_identityVerified || !_channelsReady) return;
+    if (event.started) {
+      if (_binaryRecordingSession == event.sessionId &&
+          _binaryRecordingKind != event.kind) {
+        _log('忽略同一会话的冲突录音类型');
+        return;
+      }
+      if (_binaryRecordingSession == event.sessionId) return;
+      if (event.kind == TelinkRecordingKind.long) {
+        _cancelVoice();
+        _lastRecordedBytes = null;
+        _log('收到二进制长录音开始；当前仅处理实时音频，不混入实时会话');
+      } else {
+        _handleVoiceCommand({'event': 'start', 'session_id': event.sessionId});
+        _log('已识别二进制实时录音开始');
+      }
+      _binaryRecordingSession = event.sessionId;
+      _binaryRecordingKind = event.kind;
+      _isRecording = true;
+      _settings.acceptRecording(true);
+    } else {
+      final session = _binaryRecordingSession;
+      if (session == null ||
+          (event.kind != null && event.kind != _binaryRecordingKind)) {
+        _log('忽略无匹配活动会话的二进制录音结束');
+        return;
+      }
+      if (_binaryRecordingKind == TelinkRecordingKind.realtime) {
+        _handleVoiceCommand({'event': 'release', 'session_id': session});
+      } else {
+        _log('收到二进制长录音结束；未作为实时音频提交');
+      }
+      _binaryRecordingSession = null;
+      _binaryRecordingKind = null;
+      _isRecording = false;
+      _settings.acceptRecording(false);
+    }
+    _stateChanges.add(null);
   }
 
   void _handleVoiceCommand(Map<String, dynamic> params) {
@@ -1008,25 +1176,33 @@ class AiNote6095Driver implements HardwareDeviceDriver {
       _cancelVoice();
       _voiceSession = session;
       _isRecording = true;
+      _settings.acceptRecording(true);
       _lastRecordedBytes = null;
+      _lastAudioFrameCount = 0;
       _buttonEvents.add(
           DeviceButtonEvent(buttonId: 1, action: ButtonActionType.pressDown));
       _audioReceiver.startCollecting(sessionId: session);
       _log('硬件实时录音开始 session=$session');
     } else if (_voiceSession == session && params['event'] == 'release') {
       try {
+        final frameCount = _audioReceiver.packetCount;
         _lastRecordedBytes = _audioReceiver.stopAndExport();
+        _lastAudioFrameCount = frameCount;
         _isRecording = false;
+        _settings.acceptRecording(false);
         _voiceSession = null;
+        _binaryRecordingSession = null;
+        _binaryRecordingKind = null;
         _buttonEvents.add(
             DeviceButtonEvent(buttonId: 1, action: ButtonActionType.release));
-        _log('实时录音封装完成 bytes=${_lastRecordedBytes!.length}');
+        _log('实时录音封装完成 bytes=${_lastRecordedBytes!.length} frames=$frameCount');
       } on FormatException {
         _cancelVoice();
         _log('音频为空或截断，已取消转写');
       }
     } else if (_voiceSession == session && params['event'] == 'abort') {
       _cancelVoice();
+      _settings.acceptRecording(false);
       _log('设备取消了本段实时录音');
     }
   }
@@ -1038,6 +1214,8 @@ class AiNote6095Driver implements HardwareDeviceDriver {
     }
     _audioReceiver.cancel();
     _voiceSession = null;
+    _binaryRecordingSession = null;
+    _binaryRecordingKind = null;
     _isRecording = false;
   }
 
@@ -1159,6 +1337,7 @@ class AiNote6095Driver implements HardwareDeviceDriver {
   Future<void> _disconnect({bool reconnecting = false}) async {
     _manualDisconnect = true;
     ++_generation;
+    _settings.reset();
     final cancellation = _connectCancellation;
     if (cancellation != null && !cancellation.isCompleted)
       cancellation.complete();

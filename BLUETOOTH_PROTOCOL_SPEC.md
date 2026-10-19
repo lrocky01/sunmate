@@ -60,7 +60,7 @@ JSON 首片为 `FC 01 + UInt16 大端负载总长度 + payload`，续片为 `FC 
 
 `bindResult`/`pairingResult` 不是完整业务验证成功；`success:false` 必须失败。仅在本次挑战应答之后收到 `verifyIdentityResult` 且 `params.success` 为布尔 true，并完成事件和音频通道初始化，才记录业务验证成功。写队列完成、物理连接仍在、灯亮、ANCS 允许都不是替代条件。
 
-未确认 `setAncsConfig` 或自定义 ANCS 事件码，不发送这些指令。Telink 实时音频通过 voiceCmd 的 start/release/abort 和 session_id 控制。流内容使用两个 uint32 长度字段（Opus 长度、扩展长度），再跟 Opus 与扩展数据，可跨通知；优先 LE，否则按官方 plausibility 规则尝试 BE，单段长度各不超过 8192。不是旧四字节 session/seq 头。候选实现输出单声道 Ogg/Opus，输入采样率 16000、pre-skip 312、每包 granule 增量 960；空、截断、取消的会话不提交转写。长录音与 App 主动开始/暂停/恢复仍未核实，不假造命令。
+未确认 `setAncsConfig` 或自定义 ANCS 事件码，不发送这些指令。Telink 实时音频有两个事件入口：JSON voiceCmd 的 start/release/abort 与 session_id，以及二进制 AA 55 01/02 的录音开始/停止，不能只实现 JSON。二进制开始至少12字节：第4字节为1表示 LONG，否则为 REALTIME，offset4起8字节为大端会话；停止第4字节为类型，缺省时沿用活动类型。2026-10-19 本卡按住说话实测 AA 55 01 00 / AA 55 02 00，期间收到393个有效Opus帧，无主机ATT启动应答。1.0.24+25尚漏二进制入口并在无活动会话时忽略音频，详见[音频链路调查](docs/IOS_BLE_AUDIO_LINK_AUDIT_2026-10-19.md)。流内容使用两个 uint32 长度字段（Opus 长度、扩展长度），再跟 Opus 与扩展数据，可跨通知；优先 LE，否则按官方 plausibility 规则尝试 BE，单段长度各不超过 8192。不是旧四字节 session/seq 头。候选实现输出单声道 Ogg/Opus，输入采样率 16000、pre-skip 312、每包 granule 增量 960；空、截断、取消的会话不提交转写。长录音与 App 主动开始/暂停/恢复仍未核实，不假造命令。
 
 ## 诊断与真机测试
 
@@ -73,3 +73,9 @@ CoreBluetooth 错误码不能直接套用 HCI 原因码。没有 PacketLogger/HC
 2026-10-18 1.0.18+19实体反馈：链路/GATT成功，正常bindRequest后设备返回bindError，尚未进入verifyRequest或/check。官方bindError详情依次取error/reason/message/status；1.0.19+20补安全摘要，不从87字节包长猜原因，不自动执行解绑。账号服务器字段与页面来源的完整边界见 [数据映射](docs/IOS_BLE_ACCOUNT_DATA_MAP_2026-10-18.md)。
 
 2026-10-18恢复路径续查：官方retryBindFromLocalDevice是用当前本机key补上传/bind，非密钥恢复读取接口；入口位于OpenClaw SN资格检查。两版connectToDevice原始跳转明确拒绝Telink携带非空bindSign/confirmCode/rebindSign，这些入口参数仅AI_NOTE_6095接受，不能仅凭通用JSON构造器的可选字段给Telink补签名。完整依据与首次接入方案见 [续查报告](docs/IOS_BLE_BOUND_KEY_RECOVERY_2026-10-18.md)。
+
+
+2026-10-19 验证更新：1.0.24+25 用户日志已确认保存密钥的真实 verifyIdentity 挑战成功并保持超过5分钟；本轮只读HCI另确认按键实时Opus传输及离线解码成功。上文早期版本的“仍待真实材料验证”是当时状态，不代表当前仍未通过AES；当前App端录音入口缺口见音频链路调查。
+
+
+2026-10-19 本地修复更新：已授权补齐二进制实时事件独立解码、事件/音频有序处理和安全统计，保留JSON及真实AES；11项新增回归、180项全量通过。未升级版本或打包推送，已安装1.0.24+25仍需后续包才包含该补丁。按键、维护页、灯效及首次授权边界见[设备能力记录](docs/RECORDER_CAPABILITIES_2026-10-19.md)。

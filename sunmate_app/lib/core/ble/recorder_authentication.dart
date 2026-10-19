@@ -104,6 +104,8 @@ class RecorderAccountSession {
   final ManufacturerVerifier verifier;
   final PairingCommitter committer;
   final bool hasRecoverableKey;
+  /// 密码备份恢复仅做本地密钥映射及真实AES，禁止首次绑定/云验机。
+  final bool isOfflineBackup;
   final RecorderScanIdentity? newDeviceIdentity;
   final Future<bool> Function(String deviceId, RecorderProtocol protocol,
       String detectedSerial, RecorderKeyStore store)? restoreKey;
@@ -113,7 +115,7 @@ class RecorderAccountSession {
   /// 系统候选异步查询和接入前后均需检查账号代次。
   final void Function()? validateCurrent;
   RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
-      {this.restoreKey, this.hasRecoverableKey = false, this.newDeviceIdentity,
+      {this.restoreKey, this.hasRecoverableKey = false, this.isOfflineBackup = false, this.newDeviceIdentity,
       this.matchesExistingKey, this.validateCurrent});
 }
 

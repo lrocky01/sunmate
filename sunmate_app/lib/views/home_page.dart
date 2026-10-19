@@ -11,6 +11,7 @@ import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
 import 'recorder_account_sheet.dart';
 import 'recorder_device_status.dart';
+import 'recorder_management_page.dart';
 import '../main.dart';
 
 class HomePage extends ConsumerWidget {
@@ -28,7 +29,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.24+25 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.25+26 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -106,10 +107,21 @@ class HomePage extends ConsumerWidget {
                     TextButton.icon(
                       icon: const Icon(Icons.receipt_long, size: 18),
                       label: const Text('录音卡设置与诊断'),
-                      onPressed: () => showModalBottomSheet<void>(
-                        context: context, isScrollControlled: true,
-                        builder: (_) => const BleDiagnosticsSheet(),
-                      ),
+                      onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (pageContext) => RecorderManagementPage(
+                          onOpenConnection: () => showBleDevicePickerModal(pageContext, ref),
+                          onOpenDiagnostics: () => showModalBottomSheet<void>(
+                            context: pageContext, isScrollControlled: true,
+                            builder: (_) => const BleDiagnosticsSheet()),
+                          onOpenAccount: () => showModalBottomSheet<void>(
+                            context: pageContext, isScrollControlled: true,
+                            builder: (_) => const RecorderAccountSheet()),
+                          onOpenButtonSettings: () {
+                            Navigator.pop(pageContext);
+                            ref.read(currentTabProvider.notifier).state = 4;
+                          },
+                        ),
+                      )),
                     ),
                     const Divider(height: 32),
                     Row(
@@ -395,7 +407,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.24+25', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.25+26', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
