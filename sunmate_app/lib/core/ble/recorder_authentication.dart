@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ble_json_rpc.dart';
 import 'ble_protocol.dart';
@@ -200,7 +202,8 @@ class RecorderAuthentication {
     return BleJsonRpc.request('verifyResult', {
       'encrypted_random': hmac,
       'public_key': base64Encode(publicKey.bytes),
-      // Telink 官方 profile 未带 isIos；AiNote 在 iOS 上需真机单独核对。
+      // 官方 iOS/Telink 成功报文使用整数 1；Android 保持不传此字段。
+      if (defaultTargetPlatform == TargetPlatform.iOS) 'isIos': 1,
     });
   }
 

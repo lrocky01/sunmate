@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -982,34 +984,56 @@ void main() {
     expect(driver.diagnosticText, contains('最近错误: 设备报告 bindError 失败'));
   });
 
-  test(
-      'logged-in first binding commits a fresh key then verifies a real peer challenge on reconnect',
+  for (final target in [TargetPlatform.iOS, TargetPlatform.android]) {
+    test(
+      'logged-in first binding commits a fresh key then verifies a real peer challenge on reconnect on $target',
       () async {
-    await driver.dispose();
-    final keys = MemoryKeyStore();
-    driver = AiNote6095Driver(keyStore: keys);
-    platform.firstBinding = true;
-    var checks = 0, commits = 0;
-    final session = RecorderAccountSession('AB00000000000001', (
-        {required checkContent, required mac, required sn}) async {
-      expect(checkContent, 'test-only-fresh-challenge');
-      expect(sn, 'AB00000000000001');
-      checks++;
-      return 'test-only-issued-hmac';
-    }, ({required sn, required mac, required sharedSecret}) async {
-      expect(base64Decode(sharedSecret), platform.peerSecret);
-      expect(keys.value, sharedSecret);
-      commits++;
-    });
-    expect(await driver.connectDevice(device, accountSession: session), true);
-    expect(platform.connectCount, 2);
-    expect(checks, 1);
-    expect(commits, 1);
-    expect(keys.writes, 1);
-    expect(driver.isConnected, true);
-    expect(driver.diagnosticText, isNot(contains('test-only-issued-hmac')));
-    expect(driver.diagnosticText, isNot(contains(keys.value!)));
-  });
+        debugDefaultTargetPlatformOverride = target;
+        addTearDown(() => debugDefaultTargetPlatformOverride = null);
+        await driver.dispose();
+        final keys = MemoryKeyStore();
+        driver = AiNote6095Driver(keyStore: keys);
+        platform.firstBinding = true;
+        var checks = 0, commits = 0;
+        final session = RecorderAccountSession(
+          'AB00000000000001',
+          ({required checkContent, required mac, required sn}) async {
+            expect(checkContent, 'test-only-fresh-challenge');
+            expect(sn, 'AB00000000000001');
+            checks++;
+            return 'test-only-issued-hmac';
+          },
+          ({required sn, required mac, required sharedSecret}) async {
+            expect(base64Decode(sharedSecret), platform.peerSecret);
+            expect(keys.value, sharedSecret);
+            commits++;
+          },
+        );
+        expect(
+          await driver.connectDevice(device, accountSession: session),
+          true,
+        );
+        expect(platform.connectCount, 2);
+        expect(checks, 1);
+        expect(commits, 1);
+        expect(keys.writes, 1);
+        expect(driver.isConnected, true);
+        final reply = platform.writes
+            .where((w) => w.value.length > 2 && w.value[1] == 0x30)
+            .map((w) => jsonDecode(utf8.decode(w.value.sublist(2))) as Map)
+            .singleWhere((message) => message['method'] == 'verifyResult');
+        final params = reply['params'] as Map;
+        if (target == TargetPlatform.iOS) {
+          expect(params['isIos'], isA<int>());
+          expect(params['isIos'], 1);
+        } else {
+          expect(params.containsKey('isIos'), false);
+        }
+        expect(driver.diagnosticText, isNot(contains('test-only-issued-hmac')));
+        expect(driver.diagnosticText, isNot(contains(keys.value!)));
+      },
+    );
+  }
 
   test(
       'cancel during account binding cannot launch an automatic reconnect later',

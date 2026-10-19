@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sunmate_app/core/ble/ble_protocol.dart';
 import 'package:sunmate_app/core/ble/recorder_authentication.dart';
@@ -28,6 +30,91 @@ class MemoryKeyStore implements RecorderKeyStore {
 }
 
 void main() {
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    test(
+      'Telink verifyResult uses the observed platform field on $platform',
+      () async {
+        debugDefaultTargetPlatformOverride = platform;
+        final store = MemoryKeyStore();
+        var checks = 0;
+        final auth = RecorderAuthentication(
+          protocol: RecorderProtocol.telink,
+          deviceId: 'test-device',
+          store: store,
+          verifier: ({required checkContent, required mac, required sn}) async {
+            expect(checkContent, 'test-only-challenge');
+            expect(mac, 'test-only-device');
+            expect(sn, 'test-only-serial');
+            checks++;
+            return 'test-only-issued-hmac';
+          },
+        );
+        final response = jsonDecode(
+          utf8.decode(
+            await auth.answerManufacturer({
+              'encrypted': 'test-only-challenge',
+              'mac': 'test-only-device',
+              'sn': 'test-only-serial',
+            }),
+          ),
+        );
+        final params = response['params'] as Map;
+        expect(response['method'], 'verifyResult');
+        if (platform == TargetPlatform.iOS) {
+          expect(params['isIos'], isA<int>());
+          expect(params['isIos'], 1);
+        } else {
+          expect(params.containsKey('isIos'), false);
+        }
+        expect(params['encrypted_random'], 'test-only-issued-hmac');
+        expect(base64Decode(params['public_key']), hasLength(32));
+        expect(checks, 1);
+        expect(store.writes, 0);
+        expect(auth.acceptIdentityResult(true), false);
+        expect(auth.state, RecorderAuthenticationState.awaitingPairing);
+      },
+    );
+
+    test(
+      'platform field cannot bypass issuer or existing-key checks on $platform',
+      () async {
+        debugDefaultTargetPlatformOverride = platform;
+        final store = MemoryKeyStore();
+        final noIssuer = RecorderAuthentication(
+          protocol: RecorderProtocol.telink,
+          deviceId: 'test-device',
+          store: store,
+        );
+        await expectLater(noIssuer.answerManufacturer({}), throwsStateError);
+        store.value = base64Encode(shared);
+        var checks = 0;
+        final existing = RecorderAuthentication(
+          protocol: RecorderProtocol.telink,
+          deviceId: 'test-device',
+          store: store,
+          verifier: ({required checkContent, required mac, required sn}) async {
+            checks++;
+            throw StateError('Existing key must not trigger a new issuance');
+          },
+        );
+        expect(await existing.loadKey(), true);
+        await expectLater(
+          existing.answerManufacturer({
+            'encrypted': 'test-only-challenge',
+            'mac': 'test-only-device',
+            'sn': 'test-only-serial',
+          }),
+          throwsStateError,
+        );
+        expect(checks, 0);
+        expect(store.value, base64Encode(shared));
+        expect(store.writes, 0);
+      },
+    );
+  }
+
   test('X25519 agrees with published RFC 7748 vector, without HKDF', () async {
     final pair = await X25519().newKeyPairFromSeed(alicePrivate);
     expect(
