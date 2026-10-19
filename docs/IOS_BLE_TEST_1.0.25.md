@@ -32,4 +32,13 @@
 
 ## 发布检查
 
-源码检查、Actions构建及下载核验记录在本轮交付后补充。IPA沿用现有无签名构建，需个人自签安装；构建成功不替代真实卡片的设置效果验收。
+发布源码`84d0573b4faf79955a69e625b826686804939fcb`的独立快照全量253项测试通过；分析无error/warning，仅11条原有弃用info，diff检查通过。包、首页、设置及诊断版本统一1.0.25+26。
+
+源码已推main，[Actions #41](https://github.com/lrocky01/sunmate/actions/runs/39229424404)的分析、测试、iOS原生编译、打包和上传全部成功；artifact `12176143570`。
+
+- 本机IPA：`build_output/SunMate-1.0.25+26.ipa`，9,659,338字节。
+- IPA SHA-256：`b395cb162589f992a00feb84d977998eeb2d5aba14bad9a27ff5b897edf8c03c`。
+- Artifact ZIP SHA-256：`8e379ab8a1ddc61cadfb266a29dd1b5bc979ba90a18e01b4ca310adbcaf9a67f`，与GitHub摘要一致；IPA全成员CRC通过。
+- Info.plist为1.0.25 / Build26、bundle `com.sunmate.app`；首页/诊断版本、会议多击/灯设置协议、呼吸灯和回读确认界面标记、真实身份挑战、BLE/ANCS、安全存储及文件选择插件均通过包内核验。
+
+IPA沿用现有无签名构建，需个人自签安装；本次未直接操作手机、解绑或修改真实密钥，构建成功不替代真实卡片的设置效果验收。
