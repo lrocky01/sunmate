@@ -9,6 +9,7 @@ class ChatMessage {
   final bool isUser;
   final String text;
   final DateTime timestamp;
+  final bool isFailed;
   final bool isDivider; // 是否为跨日/新会话的系统分割线
 
   ChatMessage({
@@ -17,6 +18,7 @@ class ChatMessage {
     required this.text,
     required this.timestamp,
     this.isDivider = false,
+    this.isFailed = false,
   });
 }
 
@@ -24,12 +26,14 @@ class ChatState {
   final List<ChatMessage> messages;
   final bool isListening; // 是否正在接收语音输入中
   final bool isGenerating; // 智能体是否正在流式回答中
+  final String generationStatus;
   final DateTime? lastMessageTime; // 上一次有效交互时间
 
   const ChatState({
     this.messages = const [],
     this.isListening = false,
     this.isGenerating = false,
+    this.generationStatus = '',
     this.lastMessageTime,
   });
 
@@ -38,18 +42,23 @@ class ChatState {
     bool? isListening,
     bool? isGenerating,
     DateTime? lastMessageTime,
+    String? generationStatus,
   }) {
     return ChatState(
       messages: messages ?? this.messages,
       isListening: isListening ?? this.isListening,
       isGenerating: isGenerating ?? this.isGenerating,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
+      generationStatus: generationStatus ?? this.generationStatus,
     );
   }
 }
 
 class ChatNotifier extends StateNotifier<ChatState> {
   final Ref _ref;
+  Future<void> _sendQueue = Future<void>.value();
+  int _sessionEpoch = 0;
+  int _messageSequence = 0;
 
   ChatNotifier(this._ref)
       : super(
@@ -97,7 +106,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   /// 发送文本消息 (支持凌晨 4 点跨日自动轮转与防打断保护)
-  Future<void> sendUserMessage(String content) async {
+  Future<void> sendUserMessage(String content) {
+    if (content.trim().isEmpty) return Future<void>.value();
+    final epoch = _sessionEpoch;
+    final operation = _sendQueue.then((_) async {
+      if (!mounted || epoch != _sessionEpoch) return;
+      await _sendUserMessage(content, epoch);
+    });
+    _sendQueue = operation.catchError((Object _, StackTrace __) {});
+    return operation;
+  }
+
+  Future<void> _sendUserMessage(String content, int epoch) async {
     final now = DateTime.now();
     final needRotate = _shouldRotateSession(now, state.lastMessageTime);
 
@@ -113,7 +133,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
 
     final userMsg = ChatMessage(
-      id: now.millisecondsSinceEpoch.toString(),
+      id: '${now.millisecondsSinceEpoch}_${++_messageSequence}',
       isUser: true,
       text: content,
       timestamp: now,
@@ -122,10 +142,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(
       messages: [...prefixMessages, userMsg],
       isGenerating: true,
+      generationStatus: '正在等待 Hermes 回复…',
       lastMessageTime: now,
     );
 
-    final assistantMsgId = (now.millisecondsSinceEpoch + 1).toString();
+    final assistantMsgId = '${userMsg.id}_reply';
     final assistantMsg = ChatMessage(
       id: assistantMsgId,
       isUser: false,
@@ -150,7 +171,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final startIdx = currentSessionMessages.length > 8 ? currentSessionMessages.length - 8 : 0;
     for (int i = startIdx; i < currentSessionMessages.length; i++) {
       final msg = currentSessionMessages[i];
-      if (msg.text.isNotEmpty && !msg.text.contains("Hermes 思考中...")) {
+      if (!msg.isFailed && msg.text.isNotEmpty && !msg.text.contains("Hermes 思考中...")) {
         historyList.add({
           "role": msg.isUser ? "user" : "assistant",
           "content": msg.text,
@@ -158,21 +179,39 @@ class ChatNotifier extends StateNotifier<ChatState> {
       }
     }
 
-    // 流式响应 (携带当前轮次专属上下文)
-    String accumulated = "";
-    await for (final delta in _agentClient.chatStream(content, history: historyList)) {
-      accumulated += delta;
-      state = state.copyWith(
-        messages: [
-          for (final m in state.messages)
-            if (m.id == assistantMsgId)
-              ChatMessage(id: m.id, isUser: false, text: accumulated, timestamp: m.timestamp)
-            else
-              m
-        ],
-      );
+    // 一次请求等待整个流；工具进度仅更新状态，不当作最终文本。
+    String accumulated = '';
+    void updateReply(String text, {bool failed = false}) {
+      if (!mounted || epoch != _sessionEpoch) return;
+      state = state.copyWith(messages: [
+        for (final m in state.messages)
+          if (m.id == assistantMsgId)
+            ChatMessage(id: m.id, isUser: false, text: text,
+                timestamp: m.timestamp, isFailed: failed)
+          else m,
+      ]);
     }
-    state = state.copyWith(isGenerating: false);
+    try {
+      await for (final delta in _agentClient.chatStream(content, history: historyList,
+          onProgress: (status) {
+            if (mounted && epoch == _sessionEpoch) {
+              state = state.copyWith(generationStatus: status);
+            }
+          })) {
+        if (!mounted || epoch != _sessionEpoch) return;
+        accumulated += delta;
+        updateReply(accumulated);
+      }
+    } catch (error) {
+      final message = error is AgentResponseException
+          ? error.message : '连接异常，当前回复未完成。';
+      updateReply('${accumulated.isEmpty ? '' : '$accumulated\n\n'}[回复未完成] $message',
+          failed: true);
+    } finally {
+      if (mounted && epoch == _sessionEpoch) {
+        state = state.copyWith(isGenerating: false, generationStatus: '');
+      }
+    }
   }
 
   /// 收到长按说话语音流并进行 MOSS-ASR 同步转写与 Hermes 对话
@@ -189,7 +228,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   /// 清空会话历史
   void clearMessages() {
-    state = state.copyWith(messages: []);
+    ++_sessionEpoch;
+    state = state.copyWith(messages: [], isGenerating: false, generationStatus: '');
   }
 }
 

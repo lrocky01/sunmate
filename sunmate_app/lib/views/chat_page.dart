@@ -69,7 +69,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   child: Text(
                     chatState.isListening
                         ? "正在收音中... 松开设备按键或屏幕按钮即可发送"
-                        : "支持长按对讲：按住录音卡或屏幕底部按钮直接交流",
+                        : chatState.isGenerating
+                            ? chatState.generationStatus
+                            : "支持长按对讲：按住录音卡或屏幕底部按钮直接交流",
                     style: TextStyle(
                       color: chatState.isListening ? Colors.white : Colors.orange.shade900,
                       fontSize: 12,

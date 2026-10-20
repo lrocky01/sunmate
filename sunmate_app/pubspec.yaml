@@ -1,7 +1,7 @@
 name: sunmate_app
 description: "SunMate（阳光智伴）- 伴随式第二大脑与成长智能体 (Flutter 跨平台)"
 publish_to: "none"
-version: 1.0.30+31
+version: 1.0.31+32
 
 environment:
   sdk: ">=3.0.0 <4.0.0"

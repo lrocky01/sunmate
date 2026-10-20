@@ -2,6 +2,19 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'asr_service.dart';
 
+class AgentResponseException implements Exception {
+  final String message;
+  const AgentResponseException(this.message);
+  @override
+  String toString() => message;
+}
+
+class _AgentSseEvent {
+  final String name;
+  final String data;
+  const _AgentSseEvent(this.name, this.data);
+}
+
 /// 专为本地/外网私有 Hermes 智能体打造的通信客户端
 class AgentClient {
   final Dio _dio = Dio(BaseOptions(
@@ -54,6 +67,7 @@ class AgentClient {
     String userMessage, {
     String? systemPrompt,
     List<Map<String, String>>? history,
+    void Function(String)? onProgress,
   }) async* {
     final cleanUrl = "${hermesBaseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions";
 
@@ -91,24 +105,120 @@ class AgentClient {
       );
 
       final stream = response.data.stream as Stream<List<int>>;
-      await for (final chunk in stream) {
-        final text = utf8.decode(chunk);
-        final lines = text.split('\n');
-        for (final line in lines) {
-          if (line.startsWith('data: ') && !line.contains('[DONE]')) {
-            final jsonStr = line.substring(6).trim();
-            if (jsonStr.isNotEmpty) {
-              final json = jsonDecode(jsonStr);
-              final delta = json['choices']?[0]?['delta']?['content'] ?? '';
-              if (delta.isNotEmpty) yield delta;
-            }
+      var hasText = false;
+      var stopped = false;
+      var awaitingTools = false;
+      final runningTools = <String>{};
+      await for (final frame in _sseEvents(stream)) {
+        final data = frame.data;
+        if (data.trim().isEmpty) continue;
+        if (data.trim() == '[DONE]') {
+          if (!hasText || (awaitingTools && !stopped)) {
+            throw const AgentResponseException('Hermes 已结束响应，但未收到完整答复。');
+          }
+          return;
+        }
+        final json = jsonDecode(data);
+        if (json is! Map) throw const FormatException('agent_event_shape');
+        if (frame.name == 'error' || json['error'] != null) {
+          throw const AgentResponseException('Hermes 执行失败，当前回复未完成。');
+        }
+        if (frame.name == 'hermes.tool.progress') {
+          final running = json['status'] != 'completed';
+          final id = json['toolCallId'];
+          final toolId = id is String && id.isNotEmpty ? id : '_unknown';
+          if (running) {
+            if (runningTools.length >= 256) throw const FormatException('agent_tool_limit');
+            runningTools.add(toolId);
+          } else {
+            runningTools.remove(toolId);
+          }
+          awaitingTools = runningTools.isNotEmpty;
+          onProgress?.call(awaitingTools ? 'Hermes 正在查询工具…' : '工具已返回，等待最终答复…');
+          continue;
+        }
+        if (frame.name == 'hermes.status') {
+          onProgress?.call('Hermes 正在处理，请稍候…');
+          continue;
+        }
+        if (frame.name == 'approval.request') {
+          onProgress?.call('Hermes 正在等待操作确认，请到服务端查看。');
+          continue;
+        }
+        final flags = json['hermes'];
+        if (flags is Map && (flags['completed'] == false ||
+            flags['partial'] == true || flags['failed'] == true)) {
+          throw const AgentResponseException('Hermes 报告回复未完成，已保留收到的文字。');
+        }
+        final choices = json['choices'];
+        if (choices is! List || choices.isEmpty) continue;
+        final choice = choices.first;
+        if (choice is! Map) throw const FormatException('agent_choice_shape');
+        final reason = choice['finish_reason'];
+        if (reason != null) {
+          if (reason == 'stop') {
+            stopped = true;
+            awaitingTools = false;
+          } else if (reason == 'tool_calls' || reason == 'function_call') {
+            awaitingTools = true;
+            onProgress?.call('Hermes 正在查询工具…');
+          } else {
+            throw AgentResponseException(reason == 'cancelled'
+                ? 'Hermes 已取消本次回复。'
+                : reason == 'length'
+                    ? 'Hermes 回复被截断，已保留收到的文字。'
+                    : 'Hermes 未能完成本次回复。');
           }
         }
+        final delta = choice['delta'];
+        if (delta is! Map) continue;
+        final text = delta['content'];
+        if (text is String && text.isNotEmpty) {
+          hasText = true;
+          onProgress?.call('Hermes 正在回复…');
+          yield text;
+        }
       }
-    } catch (e) {
-      // 离线或服务异常时的友好提示
-      yield "【Hermes 智能体响应】已收到你的输入。当前连接至 $hermesBaseUrl，服务返回: $e";
+      // HTTP关闭不是成功证明；仅收到开场白就断流必须显式提示。
+      if (!stopped || !hasText) {
+        throw const AgentResponseException('连接已结束，但未收到完整答复的完成标记。');
+      }
+    } on AgentResponseException {
+      rethrow;
+    } on FormatException {
+      throw const AgentResponseException('Hermes 响应格式不完整，当前回复未完成。');
+    } on DioException catch (error) {
+      final timeout = error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.connectionTimeout;
+      throw AgentResponseException(timeout
+          ? '等待 Hermes 回复超时，已保留收到的文字。'
+          : 'Hermes 连接中断，当前回复未完成。');
+    } catch (_) {
+      throw const AgentResponseException('Hermes 响应中断，当前回复未完成。');
     }
+  }
+
+  /// 网络包不等于SSE事件；保留命名事件，UTF-8字符和JSON均可跨包。
+  static Stream<_AgentSseEvent> _sseEvents(Stream<List<int>> bytes) async* {
+    final data = <String>[];
+    var name = '';
+    await for (final line in bytes.cast<List<int>>().transform(utf8.decoder)
+        .transform(const LineSplitter())) {
+      if (line.isEmpty) {
+        if (data.isNotEmpty) yield _AgentSseEvent(name, data.join('\n'));
+        data.clear();
+        name = '';
+        continue;
+      }
+      if (line.startsWith(':')) continue;
+      final colon = line.indexOf(':');
+      final field = colon < 0 ? line : line.substring(0, colon);
+      var value = colon < 0 ? '' : line.substring(colon + 1);
+      if (value.startsWith(' ')) value = value.substring(1);
+      if (field == 'event') name = value;
+      if (field == 'data') data.add(value);
+    }
+    if (data.isNotEmpty) yield _AgentSseEvent(name, data.join('\n'));
   }
 
   /// 2. 会议纪要结构化提炼 (融合 MOSS-ASR 说话人分离结果)

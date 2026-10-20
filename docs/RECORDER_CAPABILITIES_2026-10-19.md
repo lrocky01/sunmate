@@ -213,3 +213,12 @@
 SunMate原实现直接匹配路径整串，带目录合法长录会被静默归为其它文件，已用红测复现。本轮局部修复为安全剥目录、保留真实basename，指令只携带校验过的basename，不能注入任意路径；对同会话同part出现不同basename的目录拒绝下载。增加脱敏目录计数与固定同步提示。尚未获得用户实卡文件名，仍需下一次诊断核实是否命中本兼容缺口；不声称已完成真机下载和播放验收。
 
 会议纪要页面目前读取实时短语音lastRecordedBytes，未接入RecorderLongFileStore，长录也未自动转写/上传。先完成长录文件→手机归档→本地播放，再单独补会议/随身记录处理；本轮不改其流程，不接ASR/Hermes、不打包、不改版本。
+
+
+## 长录实机可播放与卡内空间保留（2026-10-20）
+
+用户安装1.0.30+31后确认录音有声音，卡片长录下载与本地播放已有实机正向反馈；不能据此声称会议纪要自动转写/云归档已经接线。SunMate只发11 22目录和11 26读取，没有远端删除编码或入口，下载不会释放卡上空间，本轮也没有新增清理。
+
+已有恢复DEX/REA缓存静态证据：BleRecordingFilePolicy.TELINK默认deleteRemotePartAfterLocalCommit=true；long-recording-live-20261020/on-complete.source.txt先fsync、大小检查、rename、目录同步、markSegmentCommitted，再发单文件11 24+UTF8 basename。telink-decode.source.txt的AA55 03 00为删除成功；LongSegmentSyncCoordinator.onDeleteResponse只记录回执，后续目录缺失才markSegmentDeleted。证据ID ev_bacd4c3af3c1f991f8c6d5609afc8cd07f1696349bac2307109ffbd150453a4a、ev_890c9a88ba507f2313e87e17b0c7a9ccfd1876aa7285649ad1929ae78b843d35、ev_3d708b436d96d041af06f511afd2841a7ac446dbf8d31353e6ad7fcc3cfefb3d。此为缓存静态分析，并非本轮实机删除验证。
+
+不复制官方自动分段删除策略。后续可单独设计“手动清理已完整归档会话”：卡片已停止、尾段补扫完成、连续分段保存并校验、整场可播放且最好另有备份，再由用户确认指定会话后删除并读目录对账。本地SHA证明本机文件一致性，不是固件提供的原始摘要。固件容量、满盘覆盖/停止、循环录音和低功耗VOR在本轮证据中仍未确认，不作容量/时长或自动清理保证。
