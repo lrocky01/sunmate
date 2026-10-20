@@ -12,6 +12,7 @@ import '../providers/device_provider.dart';
 import 'recorder_account_sheet.dart';
 import 'recorder_device_status.dart';
 import 'recorder_management_page.dart';
+import 'recorder_backup_page.dart';
 import '../main.dart';
 
 class HomePage extends ConsumerWidget {
@@ -29,7 +30,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.26+27 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.27+28 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -407,7 +408,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.26+27', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.27+28', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -463,6 +464,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   late final DeviceNotifier _deviceNotifier;
   AccountRecorderDevice? _selectedAccountDevice;
   bool _addingNewDevice = false;
+  bool _showAccountForm = false;
   bool _isConnecting = false;
   String? _connectingDeviceName;
   String? _connectionError;
@@ -470,6 +472,10 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   List<RecorderRecoveryCandidate> _recoveryCandidates = [];
   RecorderRecoveryCandidate? _selectedRecovery;
   bool _loadingRecovery = false;
+  List<({String serialNumber, String deviceName})> _importedBackups = [];
+  String? _backupError;
+  bool _loadingBackups = false;
+  int _backupRequest = 0;
   int _recoveryRequest = 0;
   StreamSubscription<String>? _logSub;
 
@@ -479,6 +485,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     _account = widget.account ?? YoooClawAccount();
     _deviceNotifier = ref.read(deviceProvider.notifier);
     unawaited(_refreshRecovery(includeSystem: false));
+    unawaited(_refreshImportedBackups());
     // 监听底层实时诊断日志，逐行驱动 UI 点亮
     _logSub = ref.read(deviceProvider.notifier).logStream.listen((_) {
       if (mounted) setState(() {});
@@ -535,14 +542,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
       );
       if (!mounted || request != _recoveryRequest) return;
       setState(() {
-        _recoveryCandidates = candidates
-            .where(
-              (c) =>
-                  selected != null ||
-                  _selectedRecovery != null ||
-                  !c.identity.previouslyVerified,
-            )
-            .toList();
+        _recoveryCandidates = candidates;
       });
     } catch (error) {
       if (!mounted || request != _recoveryRequest) return;
@@ -557,6 +557,53 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     } finally {
       if (mounted && request == _recoveryRequest)
         setState(() => _loadingRecovery = false);
+    }
+  }
+
+  Future<void> _refreshImportedBackups() async {
+    final request = ++_backupRequest;
+    setState(() { _loadingBackups = true; _backupError = null; });
+    try {
+      final materials = await _deviceNotifier.recorderBackup.imported.readAll();
+      try {
+        if (!mounted || request != _backupRequest) return;
+        setState(() {
+          _importedBackups = materials.map((m) =>
+              (serialNumber: m.serialNumber, deviceName: m.deviceName)).toList();
+        });
+      } finally {
+        for (final material in materials) { material.clear(); }
+      }
+    } catch (_) {
+      if (mounted && request == _backupRequest) setState(() {
+        _importedBackups = [];
+        _backupError = '本机备份读取失败，请重试；无需登录或解绑。';
+      });
+    } finally {
+      if (mounted && request == _backupRequest) setState(() => _loadingBackups = false);
+    }
+  }
+
+  Future<void> _connectImported(String serialNumber) async {
+    if (_isConnecting || _deviceNotifier.isBleConnecting) return;
+    setState(() { _isConnecting = true; _backupError = null; });
+    try {
+      await showImportedRecorderConnection(
+          context, _deviceNotifier.recorderBackup, serialNumber);
+      if (!mounted) return;
+      if (_deviceNotifier.bleDeviceStatus.isConnected) {
+        setState(() => _isConnecting = false);
+        Navigator.of(context).maybePop();
+      } else {
+        unawaited(_refreshRecovery(includeSystem: false));
+        unawaited(_refreshImportedBackups());
+      }
+    } catch (_) {
+      if (mounted) setState(() {
+        _backupError = '无法打开本机备份，请重新读取；现有密钥保持，无需登录。';
+      });
+    } finally {
+      if (mounted) setState(() => _isConnecting = false);
     }
   }
 
@@ -620,6 +667,32 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
         const Text('本机已保存的录音卡', style: TextStyle(fontWeight: FontWeight.bold)),
         ..._recoveryCandidates.map(_recoveryTile),
       ],
+      if (_importedBackups.isNotEmpty && !_addingNewDevice) ...[
+        const Text('已导入的录音卡备份', style: TextStyle(fontWeight: FontWeight.bold)),
+        const Text('无需官方账号。先搜索对应的卡片，再验证密钥。'),
+        for (final backup in _importedBackups.where((b) =>
+            _selectedAccountDevice == null ||
+            b.serialNumber == _selectedAccountDevice!.serialNumber))
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            leading: const Icon(Icons.key),
+            title: Text(backup.deviceName),
+            subtitle: Text('SN：${backup.serialNumber}\n已导入 · 待卡片验证'),
+            isThreeLine: true,
+            trailing: FilledButton(
+              onPressed: _isConnecting || _deviceNotifier.isBleConnecting
+                  ? null : () => _connectImported(backup.serialNumber),
+              child: const Text('离线搜索'),
+            ),
+          ),
+      ],
+      if (_loadingBackups) const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8), child: Text('正在读取本机备份…')),
+      if (_backupError != null) ...[
+        Text(_backupError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        TextButton(onPressed: _isConnecting ? null : _refreshImportedBackups,
+            child: const Text('重新读取本机备份')),
+      ],
       if (_loadingRecovery)
         const Padding(
           padding: EdgeInsets.symmetric(vertical: 8),
@@ -642,9 +715,39 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     ],
   );
 
+  Widget _localConnectionChoices() => Material(
+    color: Colors.white,
+    borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+    clipBehavior: Clip.antiAlias,
+    child: SizedBox(
+      height: MediaQuery.sizeOf(context).height * 0.85,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(children: [
+            const Expanded(child: Text('连接录音卡',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+            IconButton(tooltip: '关闭',
+                onPressed: _isConnecting ? null : () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.close)),
+          ]),
+          const Text('使用本机保存的密钥连接，无需登录官方账号。连接后仍由卡片验证身份。'),
+          const SizedBox(height: 12),
+          _recoverySection(),
+          const SizedBox(height: 16),
+          OutlinedButton(
+            onPressed: _isConnecting ? null : () => setState(() => _showAccountForm = true),
+            child: const Text('首次绑定或通过官方账号恢复'),
+          ),
+        ]),
+      ),
+    ),
+  );
+
   @override
   void dispose() {
     ++_recoveryRequest;
+    ++_backupRequest;
     _logSub?.cancel();
     if (_isConnecting) {
       unawaited(_deviceNotifier.cancelBleConnection());
@@ -700,6 +803,11 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     final devNotifier = ref.read(deviceProvider.notifier);
 
     if (_selectedAccountDevice == null && !_addingNewDevice && _selectedRecovery == null) {
+      if (!_showAccountForm && (_loadingRecovery || _loadingBackups ||
+          _recoveryCandidates.isNotEmpty || _importedBackups.isNotEmpty ||
+          _recoveryError != null || _backupError != null)) {
+        return _localConnectionChoices();
+      }
       return Material(color: Colors.white,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         clipBehavior: Clip.antiAlias,

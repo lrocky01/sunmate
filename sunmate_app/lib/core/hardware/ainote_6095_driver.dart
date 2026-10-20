@@ -15,6 +15,7 @@ import '../ble/recorder_connection_details.dart';
 import '../ble/recorder_authentication.dart';
 import '../ble/recorder_saved_identity.dart';
 import '../ble/recorder_portable_backup.dart';
+import '../ble/recorder_credential_vault.dart';
 import '../ble/yoooclaw_account.dart';
 import '../audio/opus_stream_receiver.dart';
 import 'hardware_device_driver.dart';
@@ -94,6 +95,8 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       timeout: settingsTimeout);
   RecorderAuthentication? _authentication;
   RecorderAccountSession? _activeAccountSession;
+  RecorderCandidateKeyStore? _candidateStore;
+  RecorderCredentialSelection? _credentialSelection;
   int? _nativePeripheralState;
   bool? _systemConnectedMatch;
   bool? _advertisementConnectable;
@@ -172,7 +175,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
     MobileNotificationManager? notificationManager,
     RecorderLongFileStore? longFileStore,
     RecorderLocalAudio? localAudio,
-  })  : _keyStore = keyStore ?? SecureRecorderKeyStore(),
+  })  : _keyStore = keyStore ?? RecorderCredentialVault(),
         _longFileStore = longFileStore ?? RecorderLongFileStore(),
         _localAudio = localAudio ?? MethodChannelRecorderLocalAudio(),
         _notificationManager = notificationManager ?? MobileNotificationManager(),
@@ -263,7 +266,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   String get audioStatistics =>
       '通知=$_audioNotificationCount；接收字节=$_audioReceivedBytes；会话外忽略=$_audioOutsideSession；最近完整录音帧=$_lastAudioFrameCount';
   String get diagnosticText => [
-        'SunMate 1.0.26+27',
+        'SunMate 1.0.27+28',
         '通知回传: 已接收=$_notificationsDelivered；已忽略=$_notificationsIgnored；无效=$_notificationsInvalid',
         '长录文件通道: $_fileChannelReady；同步中=${longFileLibrary.busy}；待重连=${longFileLibrary.needsReconnect}；本机可播放=${longFileLibrary.recordings.where((r) => r.canPlay).length}',
         '当前阶段: $_phase',
@@ -480,6 +483,14 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       {bool isAutoReconnect = false, RecorderAccountSession? accountSession,
       RecorderRecoveryCandidate? recoveryCandidate}) {
     if (_disposed) return Future.value(false);
+    if (accountSession?.credentialCandidate ?? false) {
+      if (isLinkConnected || recoveryCandidate != null ||
+          accountSession!.newDeviceIdentity != null || accountSession.isOfflineBackup ||
+          !accountSession.hasRecoverableKey || _keyStore is! RecorderCredentialVault) {
+        lastErrorMessage='请先断开当前连接，再从凭据候选入口验证；未改动活动密钥';
+        return Future.value(false);
+      }
+    }
     if (_restoringIdentity || _disconnectOperation != null)
       return Future.value(false);
     if (_connectionOperation != null) {
@@ -571,6 +582,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       _sawManufacturerChallenge = false;
       _needsIdentityReconnect = false;
       _activeAccountSession = accountSession;
+      _discardCandidate();
       _recoveryIdentity = recovery?.identity;
       _authentication?.cancel();
       _eventWork = Future.value();
@@ -670,6 +682,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
           _settings.reset();
           unawaited(_longRecordings.connectionLost());
           _authentication?.cancel();
+          _discardCandidate();
           _cancelVoice();
           _decoder?.reset();
           _phase = '已断开';
@@ -764,11 +777,55 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         _checkGeneration(generation);
         _log('加密备份已匹配本次广播SN和GATT；本机材料已保存，仍待真实AES验证');
       }
+      RecorderKeyStore authenticationStore = _keyStore;
+      if (accountSession?.credentialCandidate ?? false) {
+        if (profile.protocol != RecorderProtocol.telink ||
+            _advertisedSerial == null ||
+            scannedSerials.length != 1 ||
+            accountSession!.restoreKey == null ||
+            accountSession.serialNumber != _advertisedSerial) {
+          throw StateError('候选验证需要当前新鲜广播SN与完整Telink GATT匹配');
+        }
+        final identity = RecorderSavedIdentity(
+            remoteId: device.remoteId.str,
+            serialNumber: _advertisedSerial!,
+            protocol: profile.protocol,
+            deviceName: _deviceName.length <= 64 ? _deviceName : '录音卡');
+        final known = (await _identityStore.readAll()).where(
+            (r) => r.remoteId.toLowerCase() == identity.remoteId.toLowerCase());
+        if (known.any((r) => !r.sameDevice(identity)))
+          throw StateError('本机设备身份冲突；未装载候选');
+        _checkGeneration(generation);
+        accountSession.validateCurrent?.call();
+        final candidate =
+            RecorderCandidateKeyStore(device.remoteId.str, profile.protocol);
+        _candidateStore = candidate;
+        if (!await accountSession.restoreKey!(
+            device.remoteId.str,
+            profile.protocol,
+            _advertisedSerial!,
+            candidate)) throw StateError('候选资料不完整；未切换');
+        _checkGeneration(generation);
+        accountSession.validateCurrent?.call();
+        final value =
+            await candidate.read(device.remoteId.str, profile.protocol);
+        if (value == null) throw StateError('候选没有可用密钥；未切换');
+        _checkGeneration(generation);
+        accountSession.validateCurrent?.call();
+        final prepared = await (_keyStore as RecorderCredentialVault)
+            .prepare(identity, value, source: accountSession.credentialOrigin);
+        _checkGeneration(generation);
+        accountSession.validateCurrent?.call();
+        _credentialSelection = prepared;
+        authenticationStore = candidate;
+        _serialSource = '本次广播与显式凭据候选（待身份挑战验证）';
+        _log('候选已隔离保存；旧活动凭据保留，等待本次真实AES挑战');
+      }
       _decoder = RecorderEventDecoder(profile.protocol);
       _authentication = RecorderAuthentication(
         protocol: profile.protocol,
         deviceId: device.remoteId.str,
-        store: _keyStore,
+        store: authenticationStore,
         onKeySaved: (serial) async {
           _checkGeneration(generation);
           if (serial != _serialNumber) throw StateError('密钥已保存但SN不匹配，未记录恢复身份');
@@ -777,7 +834,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
               deviceName: _deviceName.length <= 64 ? _deviceName : '录音卡'));
           _checkGeneration(generation);
         },
-        verifier: accountSession == null
+        verifier: (accountSession?.credentialCandidate ?? false) ? null : accountSession == null
             ? _verifier
             : ({required checkContent, required mac, required sn}) async {
                 _checkGeneration(generation);
@@ -788,7 +845,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
                 _log('官方验机答复已通过响应检查；内容不进入日志');
                 return hmac;
               },
-        committer: accountSession == null
+        committer: accountSession == null || accountSession.credentialCandidate
             ? null
             : ({required sn, required mac, required sharedSecret}) async {
                 _checkGeneration(generation);
@@ -905,7 +962,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       ]).timeout(remainingAuthenticationTime());
       _checkGeneration(generation);
       if (_ready!.isCompleted && !_isConnected) return false;
-      _completeAuthenticatedConnection();
+      await _completeAuthenticatedConnection();
       if (_isConnected) {
         _phase = '设备业务已验证';
       } else if (!_sawAuthenticationEvent) {
@@ -967,6 +1024,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       return false;
     } finally {
       progress?.cancel();
+      if(generation==_generation && !_isConnected) _discardCandidate();
       if (identical(_connectCancellation, cancellation)) {
         _connectCancellation = null;
       }
@@ -975,6 +1033,12 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
 
   void _checkGeneration(int generation) {
     if (generation != _generation || _disposed) throw StateError('连接已取消');
+  }
+
+  void _discardCandidate() {
+    _candidateStore?.close();
+    _candidateStore = null;
+    _credentialSelection = null;
   }
 
   void _finishWaiting(bool ready) {
@@ -1252,7 +1316,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         return;
       }
       _identityVerified = true;
-      _completeAuthenticatedConnection();
+      await _completeAuthenticatedConnection();
     } else if (method == 'bindError' ||
         (['bindResult', 'pairingResult', 'verifyIdentityResult']
                 .contains(method) &&
@@ -1360,11 +1424,34 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
     _stateChanges.add(null);
   }
 
-  void _completeAuthenticatedConnection() {
+  Future<void> _completeAuthenticatedConnection() async {
     if (!_identityVerified ||
         !_channelsReady ||
         !isLinkConnected ||
         _isConnected) return;
+    final generation = _generation;
+    final selection = _credentialSelection;
+    if (selection != null) {
+      final session = _activeAccountSession;
+      await (_keyStore as RecorderCredentialVault).activateVerified(selection,
+          ensureCurrent: () {
+        _checkGeneration(generation);
+        session?.validateCurrent?.call();
+        if (!isLinkConnected ||
+            !_linkEstablished ||
+            !_channelsReady ||
+            !_identityVerified ||
+            _candidateStore == null ||
+            !identical(_credentialSelection, selection) ||
+            _authentication?.state != RecorderAuthenticationState.verified) {
+          throw StateError('候选验证连接已结束；未切换');
+        }
+      });
+      _checkGeneration(generation);
+      _credentialSelection = null;
+      _serialSource = '显式凭据候选（身份挑战已验证）';
+      _log('本次AES和业务通道均已确认，活动凭据已切换；旧版本保留可恢复');
+    }
     _isConnected = true;
     _longFiles.connected();
     if (_advertisedSerial != null && _serialSource == '本次设备广播（待身份挑战验证）') {
@@ -1613,6 +1700,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
     if (cancellation != null && !cancellation.isCompleted)
       cancellation.complete();
     _authentication?.cancel();
+    _discardCandidate();
     _cancelVoice();
     _finishWaiting(false);
     _phase = reconnecting ? '重连验证共享密钥' : 'App 请求断开连接';

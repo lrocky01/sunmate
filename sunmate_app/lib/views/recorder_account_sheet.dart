@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../providers/device_provider.dart';
 import 'recorder_device_status.dart';
+import 'recorder_backup_page.dart';
 
 class RecorderAccountSheet extends ConsumerStatefulWidget {
   final YoooClawAccount? account;
@@ -141,6 +142,51 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
         !notifier.activeDriver.isPaused;
   }
 
+  Future<void> _confirmCandidate(AccountRecorderDevice device) =>
+      _run(() async {
+        if (!_hardwareIdle() || !device.hasRecoverableKey) {
+          throw const OfficialAccountException('请先结束蓝牙连接，并读取完整账号资料');
+        }
+        final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+                    title: const Text('使用账号资料验证？'),
+                    content: SingleChildScrollView(
+                        child: Text(
+                            '${device.deviceName}\nSN：${device.serialNumber}\n\n'
+                            '本机旧凭据会安全归档保留。账号资料作为独立候选，只有卡片本次验证通过后才启用；失败或没有挑战时保持现状。\n\n'
+                            '不会解绑、重新协商或删除旧版本。')),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context, false),
+                          child: const Text('取消')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('继续验证'))
+                    ]));
+        if (confirmed != true || !mounted) return;
+        if (!_hardwareIdle())
+          throw const OfficialAccountException('连接状态已变化，请先结束当前连接');
+        final session = _account.sessionForAccountCandidate(device);
+        await showRecorderCredentialCandidate(context,
+            serialNumber: device.serialNumber, sessionForScan: (_) => session);
+        if (mounted)
+          setState(() => _status =
+              ref.read(deviceProvider.notifier).bleDeviceStatus.isConnected
+                  ? '所选凭据已通过卡片验证；旧版本保留在本机密钥与恢复中。'
+                  : '候选验证未完成；旧凭据保留，请查看蓝牙诊断。');
+      });
+
+  Widget _candidateButton(AccountRecorderDevice device) => OutlinedButton.icon(
+      onPressed: _busy ||
+              !_hardwareIdle() ||
+              !device.hasRecoverableKey ||
+              _account.hasPendingUnbind
+          ? null
+          : () => _confirmCandidate(device),
+      icon: const Icon(Icons.verified_user_outlined),
+      label: const Text('使用账号资料验证'));
+
   Future<void> _confirmUnbind(AccountRecorderDevice device) => _run(() async {
         if (!_hardwareIdle() || !_account.canUnbindDevice(device)) {
           throw const OfficialAccountException('请先结束录音和蓝牙连接，再重新读取设备');
@@ -206,7 +252,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                   Expanded(
                       child: Text(
                           widget.onSelectDevice != null
-                              ? '登录并连接录音卡'
+                              ? '连接录音卡'
                               : '恢复官方账号设备绑定',
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.bold))),
@@ -215,8 +261,9 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                       tooltip: '关闭',
                       icon: const Icon(Icons.close)),
                 ]),
+                if (widget.savedIdentitySection != null) widget.savedIdentitySection!,
                 Text(widget.onSelectDevice != null
-                    ? '使用自己的 YoooClaw App 账号登录，再选择已有设备或添加新录音卡。'
+                    ? '已有本机密钥或导入备份可直接离线连接；首次绑定或从官方账号取回资料时再登录。'
                     : '使用自己的 YoooClaw App 账号登录，读取设备绑定资料。'),
                 const Text('登录状态会安全保存在本机，重新打开时自动恢复；验证码不保存。'),
                 const SizedBox(height: 8),
@@ -227,7 +274,6 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                 if (widget.onSelectDevice == null)
                   Text('当前录音卡 SN：${notifier.detectedBleSerial}'),
                 const SizedBox(height: 12),
-                if (widget.savedIdentitySection != null) widget.savedIdentitySection!,
                 if (widget.onReconnectVerified != null) ...[
                     OutlinedButton(
                         onPressed: _busy
@@ -343,7 +389,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                     const SizedBox(height: 20),
                   ],
                   const Text(
-                      '选择连接后，将验证卡片的真实挑战，并将新绑定资料同步到自己的官方账号。录音、MOSS-ASR 和 Hermes 仍直连私有端点。'),
+                      '已有设备使用账号保存的资料验证；首次添加新卡时，才在真实协商后同步绑定资料。录音、MOSS-ASR 和 Hermes 仍直连私有端点。'),
                   for (final device in _account.devices) ...[
                     const Divider(height: 28),
                     Text(device.deviceName,
@@ -357,6 +403,8 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                             ? null
                             : () => widget.onSelectDevice!(device),
                         child: const Text('选择并搜索')),
+                    _candidateButton(device),
+                    const Text('本机旧密钥冲突时，可单独验证账号资料；验证通过后才切换，旧版本保留。'),
                     TextButton(
                         style: TextButton.styleFrom(
                             foregroundColor:
@@ -392,6 +440,8 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                                       ? null
                                       : () => _restore(binding),
                               child: const Text('恢复并验证连接')),
+                          for(final device in _account.devices.where((d)=>d.serialNumber==binding.serialNumber))
+                            _candidateButton(device),
                           if (!notifier.canRestoreBinding(binding))
                             const Text('当前卡尚未取得匹配的 SN / 协议，或设备正在操作中',
                                 style: TextStyle(fontSize: 12)),

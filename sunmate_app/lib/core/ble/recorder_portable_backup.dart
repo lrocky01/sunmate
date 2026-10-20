@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'ble_protocol.dart';
 import 'recorder_authentication.dart';
 import 'recorder_saved_identity.dart';
+import 'recorder_credential_vault.dart';
 
 /// 文件中的身份不带旧手机UUID；导入不构成卡片身份验证。
 class PortableRecorderMaterial {
@@ -230,6 +231,30 @@ class RecorderPortableStore {
     _writes = operation.catchError((Object _) {});
     return operation;
   }
+
+  /// 仅移除用户确认的导入快照；不访问活动key、路由或导出文件。
+  Future<void> remove(PortableRecorderMaterial material) {
+    final serial = material.serialNumber;
+    final expected = material._json()['secret'] as String;
+    final operation = _writes.then((_) async {
+      final key = '$_prefix$serial';
+      final value = await _storage.read(key: key);
+      if (value == null) return;
+      final previous = PortableRecorderMaterial.fromJson(jsonDecode(value));
+      try {
+        if (previous.serialNumber != serial || !previous._sameKey(expected)) {
+          throw StateError('导入资料已变化，请重新读取后再移除');
+        }
+      } finally {
+        previous.clear();
+      }
+      await _storage.delete(key: key);
+      if (await _storage.read(key: key) != null)
+        throw StateError('移除未完成，请重新读取资料');
+    });
+    _writes = operation.catchError((Object _) {});
+    return operation;
+  }
 }
 
 class RecorderBackupService {
@@ -251,6 +276,40 @@ class RecorderBackupService {
       .where(
           (i) => i.previouslyVerified && i.protocol == RecorderProtocol.telink)
       .toList();
+
+  Future<List<RecorderCredentialSummary>> credentialHistory() =>
+      keys is RecorderCredentialVault
+          ? (keys as RecorderCredentialVault).history()
+          : Future.value(const []);
+
+  RecorderAccountSession archivedSession(
+      RecorderCredentialSummary selected, RecorderScanIdentity scan) {
+    final vault = keys;
+    if (vault is! RecorderCredentialVault ||
+        !scan.isFresh(DateTime.now()) ||
+        scan.serialNumber != selected.identity.serialNumber ||
+        scan.protocol != selected.identity.protocol) {
+      throw StateError('历史凭据与当前广播不匹配');
+    }
+    return RecorderAccountSession(
+        selected.identity.serialNumber,
+        ({required checkContent, required mac, required sn}) async =>
+            throw StateError('历史恢复不执行首次验机'),
+        ({required sn, required mac, required sharedSecret}) async =>
+            throw StateError('历史恢复不执行云绑定'),
+        credentialCandidate: true,
+        credentialOrigin: '历史凭据',
+        hasRecoverableKey: true, restoreKey: (id, p, serial, store) async {
+      if (id.toLowerCase() != scan.remoteId.toLowerCase() ||
+          p != scan.protocol ||
+          serial != scan.serialNumber ||
+          store is! RecorderCandidateKeyStore) {
+        throw StateError('历史恢复目标变化；未写活动密钥');
+      }
+      await vault.loadArchived(selected, store);
+      return true;
+    });
+  }
 
   Future<Uint8List> export(
       RecorderSavedIdentity selected, String password) async {

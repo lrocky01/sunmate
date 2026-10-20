@@ -679,6 +679,19 @@ class YoooClawAccount {
   }
 
   RecorderAccountSession sessionForDevice(AccountRecorderDevice selected) {
+    return _deviceSession(selected);
+  }
+
+  RecorderAccountSession sessionForAccountCandidate(
+      AccountRecorderDevice selected) {
+    if (!selected.hasRecoverableKey) {
+      throw const OfficialAccountException('账号没有可验证的共享密钥，未启动候选切换');
+    }
+    return _deviceSession(selected, candidate: true);
+  }
+
+  RecorderAccountSession _deviceSession(AccountRecorderDevice selected,
+      {bool candidate = false}) {
     final serial = selected.serialNumber;
     final revision = _revision;
     void ensureCurrent(String sn) {
@@ -695,7 +708,9 @@ class YoooClawAccount {
 
     ensureCurrent(serial);
     return _sessionForSelection(serial, selected.deviceName, ensureCurrent,
-        uuid: selected.uuid, hasRecoverableKey: selected.hasRecoverableKey);
+        uuid: selected.uuid,
+        hasRecoverableKey: selected.hasRecoverableKey,
+        credentialCandidate: candidate);
   }
 
   RecorderAccountSession sessionForNewDevice(RecorderScanIdentity identity) {
@@ -728,6 +743,7 @@ class YoooClawAccount {
       void Function(String) ensureCurrent,
       {String? uuid,
       bool hasRecoverableKey = false,
+      bool credentialCandidate = false,
       RecorderScanIdentity? newDeviceIdentity}) {
     String? checkedMac;
     return RecorderAccountSession(
@@ -781,6 +797,7 @@ class YoooClawAccount {
           _requireSuccess(result, stage: OfficialAccountStage.binding);
         },
         hasRecoverableKey: hasRecoverableKey,
+        credentialCandidate: credentialCandidate,
         newDeviceIdentity: newDeviceIdentity,
         validateCurrent: () => ensureCurrent(serial),
         matchesExistingKey: newDeviceIdentity != null ? null : (id, protocol, store) async {

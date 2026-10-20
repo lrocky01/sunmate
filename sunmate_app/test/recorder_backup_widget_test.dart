@@ -10,6 +10,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sunmate_app/core/ble/recorder_backup_files.dart';
 import 'package:sunmate_app/core/ble/recorder_portable_backup.dart';
+import 'package:sunmate_app/core/ble/recorder_credential_vault.dart';
+import 'package:sunmate_app/core/ble/ble_protocol.dart';
 import 'package:sunmate_app/providers/device_provider.dart';
 import 'package:sunmate_app/views/recorder_backup_page.dart';
 import 'recorder_management_widget_test.dart'
@@ -109,7 +111,8 @@ void main() {
     service = RecorderBackupService(keys: DeviceKeyStore(), codec: codec);
   }
 
-  Future<void> show(WidgetTester tester, {GlobalKey? boundary}) async {
+  Future<void> show(WidgetTester tester,
+      {GlobalKey? boundary, bool stress = false}) async {
     if (tester.view.physicalSize.width != 360 &&
         tester.view.physicalSize.width != 390) {
       tester.view.physicalSize = const Size(390, 844);
@@ -129,7 +132,13 @@ void main() {
                     useMaterial3: true,
                     fontFamily: captureUi ? 'BackupFixture' : null,
                     colorScheme: ColorScheme.fromSeed(
-                        seedColor: const Color(0xFFFF8C00))),
+                        seedColor: const Color(0xFFFF8C00),
+                        brightness:
+                            stress ? Brightness.dark : Brightness.light)),
+                builder: (context, child) => MediaQuery(
+                    data: MediaQuery.of(context).copyWith(
+                        textScaler: TextScaler.linear(stress ? 1.6 : 1)),
+                    child: child!),
                 home: RecorderBackupPage(files: files)))));
     await advance(tester);
   }
@@ -313,5 +322,118 @@ void main() {
     expect(find.text('本机密钥与恢复'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await FlutterBluePlus.stopScan();
+  });
+
+  for (final size in [const Size(360, 640), const Size(390, 844)]) {
+    testWidgets(
+        'remove imported source confirmation at $size preserves active credentials',
+        (tester) async {
+      initialize();
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final keys = service.keys as DeviceKeyStore;
+      keys.values[keys.entry('old-phone', RecorderProtocol.telink)] =
+          base64Encode(shared);
+      await service.identities.save(identity());
+      final source = material();
+      await service.acceptImport(source);
+      source.clear();
+      final key = GlobalKey();
+      await show(tester, boundary: key);
+      final remove = find.byTooltip('移除导入资料');
+      await tester.scrollUntilVisible(remove, 150);
+      await advance(tester);
+      await tester.tap(remove);
+      await advance(tester);
+      expect(find.text('移除导入资料？'), findsOneWidget);
+      expect(find.textContaining('已恢复的活动密钥、导出文件'), findsOneWidget);
+      await capture(tester, key, 'credential-remove-${size.width.toInt()}');
+      await tester.tap(find.text('取消'));
+      await advance(tester);
+      final retained = await service.imported.readAll();
+      expect(retained, hasLength(1));
+      for (final m in retained) {
+        m.clear();
+      }
+      await tester.tap(remove);
+      await advance(tester);
+      await tester.tap(find.widgetWithText(TextButton, '移除导入资料'));
+      await advance(tester);
+      expect(await service.imported.readAll(), isEmpty);
+      expect(await keys.read('old-phone', RecorderProtocol.telink),
+          base64Encode(shared));
+      expect(
+          (await service.identities.readAll()).single.previouslyVerified, true);
+      expect(keys.writes, 0);
+      expect(tester.takeException(), isNull);
+    });
+    testWidgets(
+        'history source and restore confirmation at $size require fresh verification',
+        (tester) async {
+      initialize();
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final legacy = DeviceKeyStore();
+      legacy.values[legacy.entry('old-phone', RecorderProtocol.telink)] =
+          base64Encode(shared);
+      final vault = RecorderCredentialVault(legacy: legacy);
+      final selected = await vault.prepare(
+          identity(), base64Encode(List.filled(32, 8)),
+          source: '官方账号资料');
+      await vault.activateVerified(selected, ensureCurrent: () {});
+      service = RecorderBackupService(keys: vault, codec: codec);
+      final key = GlobalKey();
+      await show(tester, boundary: key);
+      await tester.scrollUntilVisible(find.text('验证并恢复'), 150);
+      await advance(tester);
+      expect(find.text('连接凭据与历史版本'), findsOneWidget);
+      await capture(tester, key, 'credential-history-${size.width.toInt()}');
+      await tester.tap(find.text('验证并恢复'));
+      await advance(tester);
+      expect(find.text('验证并恢复历史凭据？'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await advance(tester);
+      expect(await vault.read('old-phone', RecorderProtocol.telink),
+          base64Encode(List.filled(32, 8)));
+      await tester.tap(find.text('验证并恢复'));
+      await advance(tester);
+      await tester.tap(find.text('继续验证'));
+      await advance(tester);
+      expect(find.text('验证候选凭据'), findsOneWidget);
+      expect(find.textContaining('不执行首次绑定，不覆盖旧版本'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pageBack();
+      await advance(tester);
+      await FlutterBluePlus.stopScan();
+    });
+  }
+  testWidgets(
+      'large text dark theme keeps credential removal confirmation scrollable',
+      (tester) async {
+    initialize();
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final source = material();
+    await service.acceptImport(source);
+    source.clear();
+    final key = GlobalKey();
+    await show(tester, boundary: key, stress: true);
+    final remove = find.byTooltip('移除导入资料');
+    await tester.scrollUntilVisible(remove, 200);
+    await advance(tester);
+    await tester.tap(remove);
+    await advance(tester);
+    await capture(tester, key, 'credential-remove-dark-large');
+    expect(find.widgetWithText(TextButton, '移除导入资料'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await advance(tester);
+    expect(tester.takeException(), isNull);
   });
 }

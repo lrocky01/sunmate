@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:sunmate_app/core/ble/yoooclaw_account.dart';
 import 'package:sunmate_app/views/recorder_account_sheet.dart';
 import 'package:sunmate_app/views/home_page.dart';
@@ -61,6 +62,15 @@ class RestoringWidgetAccount extends WidgetAccount {
 }
 
 void main() {
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+  Future<void> chooseOfficialRoute(WidgetTester tester) async {
+    final entry = find.text('首次绑定或通过官方账号恢复');
+    if (entry.evaluate().isNotEmpty) {
+      await tester.ensureVisible(entry);
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+    }
+  }
   testWidgets('saved login restores and refreshes without SMS; logout shows login', (tester) async {
     SharedPreferences.setMockInitialValues({});
     tester.view.physicalSize = const Size(360, 640);
@@ -100,6 +110,7 @@ void main() {
         home: Scaffold(body: RecorderConnectionSheet(account: account)))));
     await tester.pumpAndSettle();
     expect(find.text('添加新录音卡'), findsNothing);
+    await chooseOfficialRoute(tester);
     await tester.enterText(find.byType(TextField).at(0), '13800000000');
     await tester.enterText(find.byType(TextField).at(1), '1234');
     await tester.ensureVisible(find.text('登录并读取我的设备'));
@@ -115,7 +126,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.byTooltip('返回账号设备'));
     await tester.pumpAndSettle();
-    expect(find.text('登录并连接录音卡'), findsOneWidget);
+    expect(find.text('连接录音卡'), findsOneWidget);
     expect(find.byType(TextField), findsNothing);
     expect(find.text('添加新录音卡'), findsOneWidget);
     expect(account.closed, false);
@@ -124,7 +135,7 @@ void main() {
     expect(account.closed, true);
   });
   testWidgets(
-      'connection entry requires account login before scanning or device SN',
+      'first binding without local material keeps official account route',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
     tester.view.physicalSize = const Size(390, 844);
@@ -136,7 +147,8 @@ void main() {
         child: MaterialApp(
             home: Scaffold(body: RecorderConnectionSheet(account: account)))));
     await tester.pumpAndSettle();
-    expect(find.text('登录并连接录音卡'), findsOneWidget);
+    expect(find.text('连接录音卡'), findsOneWidget);
+    await chooseOfficialRoute(tester);
     expect(find.text('录音卡连接设置'), findsNothing);
     expect(find.textContaining('当前录音卡 SN'), findsNothing);
     await tester.enterText(find.byType(TextField).at(0), '13800000000');
@@ -169,6 +181,7 @@ void main() {
         child: MaterialApp(
             home: Scaffold(body: RecorderConnectionSheet(account: account)))));
     await tester.pumpAndSettle();
+    await chooseOfficialRoute(tester);
     await tester.ensureVisible(find.text('选择并搜索'));
     await tester.tap(find.text('选择并搜索'));
     await tester.pump(const Duration(seconds: 5));
