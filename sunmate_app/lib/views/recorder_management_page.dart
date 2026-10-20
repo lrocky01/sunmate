@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/device_provider.dart';
+import '../core/hardware/recorder_long_recordings.dart';
 import 'recorder_device_status.dart';
 import 'recorder_backup_page.dart';
+import 'recorder_long_files_page.dart';
 
 /// 录音卡的日常管理入口；不把未核实的固件设置做成可写开关。
 class RecorderManagementPage extends ConsumerWidget {
@@ -109,6 +111,12 @@ class RecorderManagementPage extends ConsumerWidget {
                   value: device.isRecording ? '正在采音' : '实时录音与音频状态',
                   onTap: () =>
                       _open(context, const RecorderRecordingSettingsPage())),
+              _SettingsRow(
+                  icon: Icons.audio_file_outlined,
+                  title: '长录文件与播放',
+                  value: '卡片目录、保存到手机与继续恢复',
+                  onTap: () =>
+                      _open(context, const RecorderLongFilesPage())),
               _SettingsRow(
                   icon: Icons.touch_app_outlined,
                   title: '按键动作',
@@ -341,6 +349,12 @@ class _RecorderRecordingSettingsState
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _LongRecordingPurposeSection(
+              data: notifier.recorderLongRecordings,
+              onChoose: notifier.chooseLongRecordingPurpose,
+              onReload: notifier.reloadLongRecordingSessions,
+              onRetrySave: notifier.retryLongRecordingSessionSave),
+          const Divider(height: 32),
           Row(
             children: [
               Expanded(
@@ -455,9 +469,149 @@ class _RecorderRecordingSettingsState
           const Divider(height: 32),
           RecorderDeviceStatusPanel(details: notifier.bleConnectionDetails),
           const Divider(height: 32),
-          const Text('录音与转写分开验证。音频链路不依赖 ASR/Hermes；当前还没有离线录音文件列表、保存及回放功能。'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.audio_file_outlined),
+            title: const Text('长录文件与播放'),
+            subtitle: const Text('录音时保存已关闭分段，结束后校验完整音频'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const RecorderLongFilesPage())),
+          ),
+          const Text('录音与转写分开验证。长录文件校验并保存到手机后可播放，不会自动转写或发送给智能体。'),
         ],
       ),
+    );
+  }
+}
+
+class _LongRecordingPurposeSection extends StatelessWidget {
+  final RecorderLongRecordings data;
+  final Future<bool> Function(LongRecordingPurpose) onChoose;
+  final Future<void> Function() onReload;
+  final Future<bool> Function() onRetrySave;
+  const _LongRecordingPurposeSection({
+    required this.data,
+    required this.onChoose,
+    required this.onReload,
+    required this.onRetrySave,
+  });
+
+  String _time(DateTime time) {
+    final local = time.toLocal();
+    return '${local.month}月${local.day}日 ${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('长录用途', style: theme.textTheme.titleLarge),
+        const SizedBox(height: 8),
+        const Text('选择下一次新长录用于会议还是随身记录。开始后，本次用途固定；双击／三击仍只负责启停卡片录音。'),
+        const SizedBox(height: 16),
+        SegmentedButton<LongRecordingPurpose>(
+          segments: const [
+            ButtonSegment(
+              value: LongRecordingPurpose.meeting,
+              icon: Icon(Icons.groups_outlined),
+              label: Text('会议'),
+            ),
+            ButtonSegment(
+              value: LongRecordingPurpose.lifelog,
+              icon: Icon(Icons.history),
+              label: Text('随身记录'),
+            ),
+          ],
+          selected: data.loaded ? {data.preferred} : <LongRecordingPurpose>{},
+          emptySelectionAllowed: true,
+          onSelectionChanged: data.canChoose
+              ? (values) {
+                  if (values.isNotEmpty) onChoose(values.single);
+                }
+              : null,
+        ),
+        if (!data.loaded) ...[
+          const SizedBox(height: 8),
+          Text(data.failed ? '本机用途资料尚未读取。' : '正在读取本机用途资料…'),
+          if (data.failed)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onReload,
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试读取本机资料'),
+              ),
+            ),
+        ],
+        if (data.cardRecording ||
+            data.active?.observation == LongRecordingObservation.recording)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('录音中不可修改用途。已有会话会继续保留原用途。'),
+          ),
+        if (data.saving)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: LinearProgressIndicator(semanticsLabel: '正在保存本机会话用途'),
+          ),
+        if (data.active != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Text(
+              '最近活动会话：${data.active!.purposeLabel}\n${data.active!.observationLabel}',
+              style: theme.textTheme.bodyLarge,
+            ),
+          ),
+        if (data.message != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                data.message!,
+                style: TextStyle(
+                  color: data.failed
+                      ? theme.colorScheme.error
+                      : theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        if (data.unsavedSessions && data.loaded)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: data.saving ? null : onRetrySave,
+              icon: const Icon(Icons.save_outlined),
+              label: const Text('重试保存会话资料'),
+            ),
+          ),
+        if (data.sessions.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text('本机最近长录会话', style: theme.textTheme.titleMedium),
+          const SizedBox(height: 8),
+          for (final record in data.sessions.take(5))
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                record.purpose == LongRecordingPurpose.meeting
+                    ? Icons.groups_outlined
+                    : record.purpose == LongRecordingPurpose.lifelog
+                    ? Icons.history
+                    : Icons.help_outline,
+              ),
+              title: Text(
+                '${record.purposeLabel} · ${_time(record.firstObservedAt)}',
+              ),
+              subtitle: Text(record.observationLabel),
+            ),
+        ],
+        const SizedBox(height: 12),
+        const Text('这里保存会话用途及开始／结束记录，不代表音频已保存。请到“长录文件与播放”查看音频保存状态；不会自动转写或发送给智能体。'),
+      ],
     );
   }
 }

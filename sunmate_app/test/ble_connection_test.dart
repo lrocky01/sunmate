@@ -19,7 +19,7 @@ import 'yoooclaw_account_test.dart' show record, scanIdentity, AccountHttpAdapte
 import 'recorder_authentication_test.dart' show MemoryKeyStore, shared;
 
 /// 模拟 GATT 操作与设备异步事件，检查驱动不会把 ATT 成功误当业务成功。
-final class TestBlePlatform extends FlutterBluePlusPlatform {
+base class TestBlePlatform extends FlutterBluePlusPlatform {
   final scans = StreamController<BmScanResponse>.broadcast();
   final connections = StreamController<BmConnectionStateResponse>.broadcast();
   final services = StreamController<BmDiscoverServicesResult>.broadcast();

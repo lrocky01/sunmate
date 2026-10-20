@@ -133,6 +133,8 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('录音设置'));
       await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(find.text('当前状态：待命'), 220);
+      await tester.pumpAndSettle();
       expect(find.textContaining('通知=393'), findsOneWidget);
       expect(find.text('当前状态：待命'), findsOneWidget);
       await tester.pageBack();

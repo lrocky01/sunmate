@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/hardware_device_factory.dart';
 import '../core/hardware/recorder_hardware_settings.dart';
+import '../core/hardware/recorder_long_recordings.dart';
 import '../core/ble/yoooclaw_account.dart';
 import '../core/ble/recorder_authentication.dart';
 import '../core/ble/recorder_saved_identity.dart';
@@ -202,6 +203,14 @@ class DeviceNotifier extends StateNotifier<DeviceStatus> {
       _factory.bleDriver.setMeetingRecordingClicks(count);
   Future<bool> setMeetingRecordingLed(bool enabled) =>
       _factory.bleDriver.setMeetingRecordingLed(enabled);
+  RecorderLongRecordings get recorderLongRecordings =>
+      _factory.bleDriver.longRecordings;
+  Future<bool> chooseLongRecordingPurpose(LongRecordingPurpose purpose) =>
+      _factory.bleDriver.chooseLongRecordingPurpose(purpose);
+  Future<void> reloadLongRecordingSessions() =>
+      _factory.bleDriver.reloadLongRecordingSessions();
+  Future<bool> retryLongRecordingSessionSave() =>
+      _factory.bleDriver.retryLongRecordingSessionSave();
   DeviceStatus get bleDeviceStatus => DeviceStatus(
       isConnected: _factory.bleDriver.isConnected,
       deviceName: _factory.bleDriver.displayName,

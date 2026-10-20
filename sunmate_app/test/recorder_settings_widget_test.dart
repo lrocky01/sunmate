@@ -111,6 +111,8 @@ void main() {
       final notifier = SettingsNotifier();
       final key = await open(tester, notifier);
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byType(SegmentedButton<int>));
+      await tester.pumpAndSettle();
       expect(find.text('已读取卡片当前设置。'), findsOneWidget);
       expect(
           tester
@@ -141,6 +143,8 @@ void main() {
       (tester) async {
     final notifier = SettingsNotifier()..reply = false;
     final key = await open(tester, notifier);
+    await tester.ensureVisible(find.byType(SegmentedButton<int>));
+    await tester.pump();
     expect(find.text('尚未读到有效的触发方式。'), findsOneWidget);
     expect(
         tester
@@ -156,6 +160,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('未收到完整设置回报，请重新读取。'), findsOneWidget);
     notifier.reply = true;
+    await tester.scrollUntilVisible(find.text('读取卡片设置'), -200);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('读取卡片设置'));
     await tester.pumpAndSettle();
     expect(find.text('已读取卡片当前设置。'), findsOneWidget);
@@ -166,6 +172,8 @@ void main() {
       (tester) async {
     final notifier = SettingsNotifier();
     final key = await open(tester, notifier);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byType(SegmentedButton<int>));
     await tester.pumpAndSettle();
     notifier.acceptWrite = false;
     await tester.tap(find.text('三击'));

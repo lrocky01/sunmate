@@ -35,6 +35,11 @@ class MobileNotificationManager {
   factory MobileNotificationManager() => _instance;
   MobileNotificationManager._internal();
 
+  /// 独立实例供本地回归/独立消费者使用，不关闭全局通知流。
+  MobileNotificationManager.isolated();
+
+  int _ancsSequence = 0;
+
   final _notificationStreamController = StreamController<TimelineEntry>.broadcast();
   Stream<TimelineEntry> get notificationStream => _notificationStreamController.stream;
 
@@ -52,7 +57,7 @@ class MobileNotificationManager {
       // Android 端: 检查是否已授予 NotificationListenerService 特殊权限
       // 真实设备可通过 MethodChannel 或 flutter_notification_listener 桥接
     } else if (Platform.isIOS) {
-      // iOS 端: 遵循苹果隐私沙箱规范，通过 EventKit 日程/提醒与 URL Scheme 接收
+      // iOS ANCS 正文由已鉴权的录音卡驱动接入；普通 App 不直接监听其它 App 通知。
     }
   }
 
@@ -115,13 +120,14 @@ class MobileNotificationManager {
     required String appIdentifier,
     required String title,
     required String message,
+    String subtitle = '',
     DateTime? timestamp,
   }) {
-    if (message.trim().isEmpty && title.trim().isEmpty) return;
+    if (message.trim().isEmpty && title.trim().isEmpty && subtitle.trim().isEmpty) return;
     final entryTime = timestamp ?? DateTime.now();
     final appName = _resolveHumanFriendlyAppName(appIdentifier);
 
-    // 智能噪音过滤：过滤验证码、促销和纯表情
+    // 现有促销标记只分类，不删除通知，也不触发任何网络上传。
     final isPromo = message.contains("退订") ||
         message.contains("优惠券") ||
         message.contains("仅剩") ||
@@ -129,11 +135,13 @@ class MobileNotificationManager {
         message.contains("大促");
 
     final entry = TimelineEntry(
-      id: "ancs_${entryTime.millisecondsSinceEpoch}_${appIdentifier.hashCode}",
+      id: "ancs_${entryTime.millisecondsSinceEpoch}_${appIdentifier.hashCode}_${++_ancsSequence}",
       timestamp: entryTime,
       sourceType: TimelineSourceType.appNotification,
       sourceApp: appName,
-      content: title.isNotEmpty ? "[$title]: $message" : message,
+      content: title.isNotEmpty
+          ? "[$title]: ${[subtitle, message].where((s) => s.isNotEmpty).join('\n')}"
+          : [subtitle, message].where((s) => s.isNotEmpty).join('\n'),
       tags: isPromo ? "外部通知·已过滤" : "外部通知·高价值",
     );
 

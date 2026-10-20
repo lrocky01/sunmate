@@ -36,7 +36,7 @@
 | 改名 | BleApiService.updateDeviceName：/api/device/toc/externalDeviceBind/updateName | 官方云账号元数据更新；蓝牙改名指令未证实 |
 | 连接/电池/固件/录音状态 | 原生链路、reportStatus；官方有battery、version/currentVersion/firmwareVersion、recording等兼容字段 | 可统一只读显示；缺失字段显示未知，不能伪造 |
 | 实时录音 | 2B31控制、2B32音频；两类事件入口 | 本地补丁已修，本轮不实现长录音文件管理 |
-| 长录音与文件 | mode1，分段协调；2B33文件通道；17 22列表、17 26读取、17 24删除；AA55 05/06元信息/结束，AA55 08文件列表 | 删除是独立破坏性操作；当前不新增、不调用；文件同步与恢复应单独回归 |
+| 长录音与文件 | mode1，分段协调；2B33文件通道；11 22列表、11 26读取、11 24删除（均十六进制）；AA55 05/06元信息/结束，AA55 08文件列表 | 后续本地实现已补目录/分段/恢复/尾扫/校验合成及WAV播放入口；2026-10-20新增两用途录音期间闭合段同步，stop后完整归档；不读取当前写入段，不删除卡片源段，实卡验收待后续安装包，详见长录流程报告第7/8节 |
 | 录音灯/交互 | reportUserSettings返回相应状态，设置页有待确认/超时状态 | 写入参数尚有保护缺口，待独立核对，不直接开放硬件开关 |
 | 结果灯 | BleDeviceCommandService.voiceCommandUploadResult：lightCtrl，mode4，success | 完整静态命令已确认，不能假报上传成功，也不是录音启动ACK |
 | 自定义灯效入口 | BleAsrWiring$sink$1.lightCtrl转发LIGHT_CTRL，mode5、payload_hex、可选title | 有入口不等于已恢复RGB/亮度/节奏编码，尚不能任意发hex |
