@@ -193,16 +193,24 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
         }
         setState(() => _confirmingUnbind = true);
         bool? confirmed;
+        final metadataOnly = device.isSharedSecretMissing;
+        final archiveDescription = metadataOnly
+            ? '账号没有返回共享密钥，没有可备份的账号密钥。'
+                '提交前安全归档SN、MAC及原始扩展资料；这份归档不能用于密钥恢复。'
+                '本机旧密钥保留，历史版本也保留。'
+            : '将删除这张卡在官方账号中的绑定记录。'
+                '提交前会安全备份账号恢复资料，本机旧密钥保留。';
         try {
           confirmed = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-                  title: const Text('解绑账号设备？'),
+                  title: Text(metadataOnly ? '仅解绑账号记录？' : '解绑账号设备？'),
                   content: SingleChildScrollView(
                       child: Text(
                           '${device.deviceName}\nSN：${device.serialNumber}\n\n'
-                          '将删除这张卡在官方账号中的绑定记录。提交前会安全备份账号恢复资料，本机旧密钥保留。\n\n'
-                          '当前未连接，不会清除卡内数据或系统配对。后续重新绑定可能影响未同步录音，请先确认已备份。')),
+                          '$archiveDescription\n\n'
+                          '${metadataOnly ? "确认后只请求删除服务器账号记录。" : ""}'
+                          '不会清除卡内数据或系统配对，也不会自动重新绑定。解绑不能保证修复连接或身份挑战超时；后续重新绑定可能影响未同步录音，请先确认已备份。')),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(context, false),
@@ -212,7 +220,7 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                             foregroundColor:
                                 Theme.of(context).colorScheme.error),
                         onPressed: () => Navigator.pop(context, true),
-                        child: const Text('备份并解绑账号设备')),
+                        child: Text(metadataOnly ? '归档并仅解绑账号记录' : '备份并解绑账号设备')),
                   ],
                 ));
         } finally {
@@ -414,10 +422,16 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                                 !_account.canUnbindDevice(device)
                             ? null
                             : () => _confirmUnbind(device),
-                        child: const Text('解绑账号设备')),
+                        child: Text(device.isSharedSecretMissing ? '仅解绑账号记录' : '解绑账号设备')),
                     if (!_hardwareIdle()) const Text('请先结束录音和蓝牙连接，再解绑账号设备。'),
-                    if (!device.hasMac || !device.hasRecoverableKey)
-                      const Text('账号恢复资料不完整，暂不能安全备份并解绑。'),
+                    if (!device.hasMac)
+                      const Text('账号未返回真实MAC，不能提交账号解绑；不会用iPhone设备UUID代替。')
+                    else if (device.isSharedSecretMissing)
+                      Text(_account.canUnbindDevice(device) || _busy || _account.hasPendingUnbind
+                          ? '账号未返回共享密钥；可手动仅解绑账号记录，先归档元数据并保留本机密钥。此操作不会自动重新绑定。'
+                          : '账号扩展资料暂不能完整安全归档，请重新读取设备；未开放解绑，不会丢弃未知字段。')
+                    else if (!device.hasRecoverableKey)
+                      const Text('账号返回了密钥字段，但格式或设备类型不匹配；暂不能安全备份并解绑，请保留账号诊断。'),
                   ],
                 ],
                 if (widget.onSelectDevice == null)

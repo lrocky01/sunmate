@@ -116,6 +116,8 @@ class AccountRecorderDevice {
   final bool hasSharedSecretField;
   final bool hasRecoverableKey;
   final bool hasStructuredBindingInfo;
+  bool get isSharedSecretMissing =>
+      hasStructuredBindingInfo && !hasSharedSecretField;
   AccountRecorderDevice._(
       this.serialNumber,
       this.deviceName,
@@ -211,6 +213,8 @@ class YoooClawAccount {
   bool _closed = false;
   List<OwnedRecorderBinding> _bindings = [];
   List<AccountRecorderDevice> _devices = [];
+  // 缺少已知密钥字段时保留完整扩展资料，未知字段只进入安全归档，不写日志。
+  final Map<String, String> _missingKeySnapshots = {};
   Set<String> _listedSerials = {};
   bool _hasDeviceSnapshot = false;
   List<AccountRecorderDevice> get devices => List.unmodifiable(_devices);
@@ -522,7 +526,7 @@ class YoooClawAccount {
       throw const OfficialAccountException('账号设备列表缺失或格式不兼容');
     }
     _appendDiagnostic('设备响应结构：顶层 ${result.length} 字段；data ${data.length} 字段；'
-        '设备记录 ${records.length} 条（仅记录数量和已知字段类型，不输出原始内容）');
+        '设备记录 ${records.length} 条（仅记录数量、字段名称和类型，不输出字段值）');
     _clearBindings();
     _revision++;
     totalDevices = records.length;
@@ -536,6 +540,17 @@ class YoooClawAccount {
             RegExp(r'^[A-Za-z]{2}[0-9]{14}$').hasMatch(serial.trim())) {
           final id = serial.trim().toUpperCase();
           counts[id] = (counts[id] ?? 0) + 1;
+          final ext = record['extInfo'];
+          if (ext is Map && !ext.containsKey('sharedSecret')) {
+            try {
+              final snapshot = jsonEncode(ext);
+              if (utf8.encode(snapshot).length <= 32768) {
+                _missingKeySnapshots[id] = snapshot;
+              }
+            } catch (_) {
+              // 不能完整安全归档时不开放缺密钥记录的解绑，不丢弃未知资料。
+            }
+          }
         }
         final info = record['extInfo'];
         if (info is Map && !info.containsKey('sharedSecret')) {
@@ -581,13 +596,15 @@ class YoooClawAccount {
       _devices.any((device) => identical(device, selected)) &&
       !_pendingUnbind.containsKey(selected.serialNumber) &&
       selected.hasMac &&
-      selected.hasRecoverableKey;
+      (selected.hasRecoverableKey ||
+          (selected.isSharedSecretMissing &&
+              _missingKeySnapshots.containsKey(selected.serialNumber)));
 
   /// 仅账号解绑；不调用 HAL、不清卡、不删除活动密钥或系统配对。
   Future<void> unbindDevice(AccountRecorderDevice selected,
       {required bool Function() canProceed}) async {
     if (!canUnbindDevice(selected) || !canProceed()) {
-      throw const OfficialAccountException('请重新读取并选择资料完整的设备，且先结束录音和蓝牙连接');
+      throw const OfficialAccountException('请结束录音和蓝牙连接，重新读取唯一且含真实MAC的账号设备；有密钥字段但无法解析时须先核对资料');
     }
     _unbinding = true;
     final revision = ++_revision; // 立即使既有验机/绑定会话失效。
@@ -604,29 +621,40 @@ class YoooClawAccount {
     try {
       final candidates =
           _bindings.where((b) => b.serialNumber == serial).toList();
-      if (candidates.length != 1 || candidates.single._secret == null) {
-        throw const OfficialAccountException('缺少唯一可恢复资料，未发送解绑请求');
+      final metadataOnly = selected.isSharedSecretMissing;
+      if ((metadataOnly && candidates.isNotEmpty) ||
+          (!metadataOnly &&
+              (candidates.length != 1 || candidates.single._secret == null))) {
+        throw const OfficialAccountException('账号恢复资料状态不一致，未发送解绑请求');
       }
-      final binding = candidates.single;
+      final binding = metadataOnly ? null : candidates.single;
       final archive = jsonEncode({
         'version': 1,
         'userId': _userId,
         'serialNumber': serial,
         'deviceName': selected.deviceName,
-        'protocol': binding.protocol.name,
+        if (binding != null) 'protocol': binding.protocol.name,
+        if (metadataOnly) 'protocolLabel': selected.protocolLabel,
         'mac': selected._mac,
         if (selected.uuid != null) 'uuid': selected.uuid,
-        'sharedSecret': base64Encode(binding._secret!),
+        if (binding != null) 'sharedSecret': base64Encode(binding._secret!),
+        if (metadataOnly) 'keyMaterialState': 'missing',
+        if (metadataOnly)
+          'accountExtInfo': jsonDecode(_missingKeySnapshots[serial]!),
         'savedAt': DateTime.now().toUtc().toIso8601String(),
-        'purpose': 'pre-account-unbind-unverified-recovery',
+        'purpose': metadataOnly
+            ? 'pre-account-unbind-metadata-only'
+            : 'pre-account-unbind-unverified-recovery',
       });
       try {
         await _backupStore.saveVerified(archive);
       } catch (_) {
-        throw const OfficialAccountException('恢复资料安全备份或读回校验失败，未发送解绑请求');
+        throw const OfficialAccountException('账号资料安全归档或读回校验失败，未发送解绑请求');
       }
       ensureCurrent();
-      _appendDiagnostic('解绑前恢复资料已独立安全归档并读回确认；活动密钥保留');
+      _appendDiagnostic(metadataOnly
+          ? '账号元数据已安全归档并读回确认；没有可备份的账号密钥，本机活动及历史密钥保留'
+          : '解绑前恢复资料已独立安全归档并读回确认；活动密钥保留');
       _pendingUnbind[serial] = false;
       final result = await _post(
           deviceService, '/api/device/toc/externalDeviceBind/unbind',
@@ -671,9 +699,21 @@ class YoooClawAccount {
     ];
     const extNames = ['mac', 'sharedSecret', 'uuid'];
     final info = record['extInfo'];
+    // 只展示有限长度的标识符字段名和类型，不展示值、嵌套内容或任意文本键。
+    String extraFields(Map map, List<String> known) {
+      final unknown = map.keys.where((key) => !known.contains(key)).toList();
+      final safe = unknown
+          .whereType<String>()
+          .where((key) => RegExp(r'^[A-Za-z_][A-Za-z0-9_]{0,47}$').hasMatch(key))
+          .toList()..sort();
+      final shown = safe.take(8).toList();
+      if (unknown.isEmpty) return '';
+      return '；额外字段：${fields(map, shown)}'
+          '${unknown.length > shown.length ? "；其余字段名已省略" : ""}';
+    }
     final extra = record.keys.where((key) => !names.contains(key)).length;
     final ext = info is Map
-        ? '扩展 ${info.length} 字段（额外 ${info.keys.where((key) => !extNames.contains(key)).length}）：${fields(info, extNames)}'
+        ? '扩展 ${info.length} 字段（额外 ${info.keys.where((key) => !extNames.contains(key)).length}）：${fields(info, extNames)}${extraFields(info, extNames)}'
         : '扩展不是对象';
     return '设备记录 #$index：${record.length} 字段（额外 $extra）；${fields(record, names)}；$ext';
   }
@@ -823,6 +863,7 @@ class YoooClawAccount {
   }
 
   void _clearBindings() {
+    _missingKeySnapshots.clear();
     for (final binding in _bindings) binding.clear();
     _bindings = [];
     _devices = [];

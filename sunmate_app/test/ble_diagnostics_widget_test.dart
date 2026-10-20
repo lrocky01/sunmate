@@ -26,7 +26,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.byTooltip('复制诊断日志'));
     await tester.pump();
-    expect(copied, contains('SunMate 1.0.27+28'));
+    expect(copied, contains('SunMate 1.0.28+29'));
     expect(copied, contains('记录 299'));
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 300));

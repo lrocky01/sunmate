@@ -337,6 +337,57 @@ void main() {
     expect(text, isNot(contains('AB00000000000001')));
     expect(adapter.requests.length, 2);
   });
+  test('extra extension diagnostics show bounded identifiers and types without values', () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (_) => response({'code': '000000', 'data': {'deviceList': [
+      {...record(), 'extInfo': {
+        'mac': 'private-mac-value',
+        'uuid': 'private-uuid-value',
+        'shared_secret': 'private-alternate-secret',
+        'iosVersion': 'private-version-value',
+        'syncState': {'nestedPrivateKey': 'private-nested-value'},
+        'flags': ['private-list-value'],
+        'emptyValue': '',
+        'nullableField': null,
+        'private-key-with-hyphens': 'private-value',
+        'line\nbreak': 'private-value',
+        'x' * 49: 'private-value',
+      }}
+    ]}});
+    await client.loadBindings();
+    final text = client.diagnostics.join('\n');
+    expect(text, contains('shared_secret=非空字符串'));
+    expect(text, contains('iosVersion=非空字符串'));
+    expect(text, contains('syncState=对象'));
+    expect(text, contains('flags=数组'));
+    expect(text, contains('emptyValue=空字符串'));
+    expect(text, contains('nullableField=null'));
+    expect(text, contains('其余字段名已省略'));
+    expect(text, isNot(contains('private-')));
+    expect(text, isNot(contains('nestedPrivateKey')));
+    expect(text, isNot(contains('line\nbreak')));
+    expect(text, isNot(contains('x' * 49)));
+    expect(adapter.requests, hasLength(2));
+  });
+
+  test('extra extension diagnostics expose at most eight names in stable order', () async {
+    await client.login('13800000000', '1234');
+    adapter.respond = (_) => response({'code': '000000', 'data': {'deviceList': [
+      {...record(), 'extInfo': {
+        'mac': 'private-mac-value',
+        for (var i = 9; i >= 0; i--) 'field$i': 'private-value-$i',
+      }}
+    ]}});
+    await client.loadBindings();
+    final text = client.diagnostics.join('\n');
+    expect(text, contains('field0=非空字符串, field1=非空字符串'));
+    expect(text, contains('field7=非空字符串'));
+    expect(text, isNot(contains('field8=')));
+    expect(text, isNot(contains('field9=')));
+    expect(text, isNot(contains('private-')));
+    expect(text, contains('其余字段名已省略'));
+  });
+
   test('invalid input and queries without login never leave the device',
       () async {
     await expectLater(client.sendSms('not-a-phone'),
