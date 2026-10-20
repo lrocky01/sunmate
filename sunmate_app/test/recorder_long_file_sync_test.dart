@@ -129,6 +129,7 @@ void main() {
   late RecorderLongFileSync sync;
   var ready = true;
   var idle = true;
+  var selectedPurpose = LongRecordingPurpose.meeting;
   setUp(() async {
     sandbox = await Directory.systemTemp.createTemp('sm-file-sync-');
     store = RecorderLongFileStore(
@@ -138,6 +139,7 @@ void main() {
     wire = FileSyncTestWire();
     ready = true;
     idle = true;
+    selectedPurpose = LongRecordingPurpose.meeting;
     sync = RecorderLongFileSync(
         store: store,
         audio: audio,
@@ -145,7 +147,7 @@ void main() {
         isReady: () => ready,
         isIdle: () => idle,
         serialNumber: () => sn,
-        purpose: (_) => LongRecordingPurpose.meeting,
+        purpose: (_) => selectedPurpose,
         onChanged: () {},
         progressTimeout: const Duration(milliseconds: 60),
         tailInterval: const Duration(milliseconds: 1));
@@ -405,6 +407,136 @@ void main() {
     }
     final other = [0xaa, 0x55, 8, ...utf8.encode('../longops_s1_p0.ops 11')];
     expect(TelinkLongFileEvent.decode(other), isA<TelinkOtherFile>());
+  });
+
+  test('firmware directory prefixes normalize to a long-recording basename',
+      () {
+    for (final prefix in ['/storage/', '/records/nested/', 'records/', '//']) {
+      final bytes = [
+        0xaa,
+        0x55,
+        8,
+        ...utf8.encode('${prefix}longops_s${session}_p0.ops 11')
+      ];
+      final event = TelinkLongFileEvent.decode(bytes);
+      expect(event, isA<TelinkFileListEntry>());
+      final entry = (event as TelinkFileListEntry).entry;
+      expect(entry.sessionId, session);
+      expect(entry.remoteName, 'longops_s${session}_p0.ops');
+      expect(utf8.decode(TelinkLongFileEvent.readCommand(entry).sublist(2)),
+          entry.remoteName);
+    }
+  });
+
+  test('padded firmware part names are preserved in the exact read command',
+      () {
+    final name = 'longops_s${session}_p0000.ops';
+    final event = TelinkLongFileEvent.decode(
+            [0xaa, 0x55, 8, ...utf8.encode('/records/$name 11')])
+        as TelinkFileListEntry;
+    expect(event.entry.part, 0);
+    expect(utf8.decode(TelinkLongFileEvent.readCommand(event.entry).sublist(2)),
+        name);
+  });
+
+  for (final mode in LongRecordingPurpose.values) {
+    test(
+        '${mode.name}: prefixed catalog downloads, validates and archives both segments',
+        () async {
+      selectedPurpose = mode;
+      wire.onList = (_) {
+        for (final part in wire.parts.keys) {
+          sync.acceptEvent([
+            0xaa,
+            0x55,
+            8,
+            ...utf8.encode(
+                '/records/longops_s${session}_p$part.ops ${wire.parts[part]!.length}')
+          ]);
+        }
+        sync.acceptEvent([0xaa, 0x55, 8]);
+      };
+      expect(await sync.refresh(), true);
+      expect(sync.snapshot.recordings, hasLength(1));
+      expect(await sync.sync(session), true);
+      expect(wire.reads, [0, 1]);
+      expect(sync.snapshot.recordings.single.canPlay, true);
+      expect(sync.snapshot.recordings.single.purpose, mode);
+      expect((await store.loadRecords()).single.canPlay, true);
+    });
+  }
+
+  test('unsafe paths and unrelated files stay excluded', () {
+    for (final name in [
+      '../longops_s1_p0.ops',
+      '/records/../longops_s1_p0.ops',
+      './longops_s1_p0.ops',
+      '/records/./longops_s1_p0.ops',
+      r'records\longops_s1_p0.ops',
+      '/records/longops_s1_p0.ops\u0000',
+      '/records/settings.json',
+      '/records/longops_s1_p0.ops/'
+    ]) {
+      expect(
+          TelinkLongFileEvent.decode(
+              [0xaa, 0x55, 8, ...utf8.encode('$name 11')]),
+          isA<TelinkOtherFile>());
+    }
+  });
+
+  test('read only accepts a basename matching its numeric identity', () {
+    for (final name in [
+      '../longops_s${session}_p0.ops',
+      'longops_s${session}_p1.ops',
+      'longops_s1_p0.ops',
+      'longops_s${session}_p0.ops\n'
+    ]) {
+      expect(
+          () => TelinkLongFileEvent.readCommand(
+              RecorderLongFileEntry(session, 0, 11, remoteName: name)),
+          throwsFormatException);
+    }
+    final canonical = RecorderLongFileEntry(session, 0, 11);
+    final padded = RecorderLongFileEntry(session, 0, 11,
+        remoteName: 'longops_s${session}_p0000.ops');
+    expect(canonical.signature, '$session:0:11');
+    expect(padded.signature, isNot(canonical.signature));
+  });
+
+  test('catalog diagnostics expose counts without filenames or directories',
+      () async {
+    wire.onList = (_) {
+      sync.acceptEvent([
+        0xaa,
+        0x55,
+        8,
+        ...utf8.encode('/private-test/longops_s${session}_p0.ops 11')
+      ]);
+      sync.acceptEvent(
+          [0xaa, 0x55, 8, ...utf8.encode('/private-test/unrelated.dat 11')]);
+      sync.acceptEvent([0xaa, 0x55, 8]);
+    };
+    expect(await sync.refresh(), true);
+    expect(
+        sync.catalogDiagnostics, '请求=1；最近条目=2；识别长录=1；忽略其它=1；带目录=1；目录完成=true');
+    expect(sync.catalogDiagnostics, isNot(contains('private-test')));
+    expect(sync.catalogDiagnostics, isNot(contains('$session')));
+  });
+
+  test('different basenames for the same session and part reject the catalog',
+      () async {
+    wire.onList = (_) {
+      sync.acceptEvent(listEntry(0, 11));
+      sync.acceptEvent([
+        0xaa,
+        0x55,
+        8,
+        ...utf8.encode('/records/longops_s${session}_p0000.ops 11')
+      ]);
+    };
+    expect(await sync.refresh(), false);
+    expect(sync.snapshot.needsReconnect, true);
+    expect(wire.reads, isEmpty);
   });
 
   test(

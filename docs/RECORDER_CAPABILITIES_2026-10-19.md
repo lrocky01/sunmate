@@ -202,3 +202,14 @@
 云同步失败、取消或验证失败时保留旧活动引用及已落盘新待验版本，可由现有历史版本入口继续本地AES；不自动重试协商、解绑、清卡、覆盖v1或删除原录音。若卡已接受新公钥，本机保留旧key并不证明卡仍接受它，也不能回滚卡内状态。进程在派生/持久化前终止或安全存储写失败时，无法承诺新key已保存，错误路径不会冒称成功。
 
 新增25定点回归，全量489项通过；分析无error/warning（11条既有info），360/390合成截图核对，依赖锁和diff检查通过。HAL/PhoneMic/私有端点、版本1.0.28+29保持；仅本地实现，未提交/打包推送，未访问真实账号/设备。实卡是否允许当前状态重新绑定及iOS系统配对仍待独立真机验收。
+
+
+## 长录目录识别差异与本轮边界（2026-10-20）
+
+用户1.0.29+30已完成显式真实重绑与AES验证，通知/实时短语音正常；两场长录已记录开始/结束，文件CCCD已确认。目录请求有44字节条目及3字节结束回包，但日志未见任何分段read请求。截图的“会议／随身记录”是会话用途元数据，不能代表音频已保存。
+
+复用已有REA证据ev_de3a2929fc012991227864be15f1eb0d1296eaa985d64c59cfdc6e7dc0746572（reconstructed-analysis-only.apk，TelinkProtocolAdapter.decode），官方先从完整路径取basename，再交给LongOpsPartName解析；后者保留原basename，包括零填充。缓存证据路径为tools/ble_audit/long-recording-implementation-20261019/wire-review/telink-decode.source.txt及tools/ble_audit/official-downloads/decompiled-2/sources/com/yoootek/yooolib/blemanage/LongOpsPartName.java。本轮未重新反编译或执行官方iOS代码。
+
+SunMate原实现直接匹配路径整串，带目录合法长录会被静默归为其它文件，已用红测复现。本轮局部修复为安全剥目录、保留真实basename，指令只携带校验过的basename，不能注入任意路径；对同会话同part出现不同basename的目录拒绝下载。增加脱敏目录计数与固定同步提示。尚未获得用户实卡文件名，仍需下一次诊断核实是否命中本兼容缺口；不声称已完成真机下载和播放验收。
+
+会议纪要页面目前读取实时短语音lastRecordedBytes，未接入RecorderLongFileStore，长录也未自动转写/上传。先完成长录文件→手机归档→本地播放，再单独补会议/随身记录处理；本轮不改其流程，不接ASR/Hermes、不打包、不改版本。

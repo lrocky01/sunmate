@@ -14,9 +14,16 @@ class RecorderLongFileEntry {
   final int sessionId;
   final int part;
   final int size;
-  const RecorderLongFileEntry(this.sessionId, this.part, this.size);
-  String get remoteName => 'longops_s${sessionId}_p$part.ops';
-  String get signature => '$sessionId:$part:$size';
+  final String? _remoteName;
+  const RecorderLongFileEntry(this.sessionId, this.part, this.size,
+      {String? remoteName})
+      : _remoteName = remoteName;
+  String get remoteName => _remoteName ?? 'longops_s${sessionId}_p$part.ops';
+  String get signature {
+    final canonical = 'longops_s${sessionId}_p$part.ops';
+    // 保持既有归档指纹；固件的零填充文件名仍参与目录变更检查。
+    return '$sessionId:$part:$size${remoteName == canonical ? '' : ':$remoteName'}';
+  }
 }
 
 class RecorderCommittedSegment {

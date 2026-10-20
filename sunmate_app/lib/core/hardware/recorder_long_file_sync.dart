@@ -69,6 +69,16 @@ class RecorderLongFileSync {
   bool _poisoned = false;
   bool _disposed = false;
   String? _message;
+  int _catalogRequests = 0;
+  int _catalogEntries = 0;
+  int _catalogRecognized = 0;
+  int _catalogIgnored = 0;
+  int _catalogPrefixed = 0;
+  bool _catalogComplete = false;
+
+  // 只记录计数，不保留或输出固件返回的任意文件名和目录。
+  String get catalogDiagnostics =>
+      '请求=$_catalogRequests；最近条目=$_catalogEntries；识别长录=$_catalogRecognized；忽略其它=$_catalogIgnored；带目录=$_catalogPrefixed；目录完成=$_catalogComplete';
 
   RecorderLongFileSync(
       {required this.store,
@@ -423,6 +433,9 @@ class RecorderLongFileSync {
     unawaited(future.then<void>((_) {}, onError: (Object _, StackTrace __) {}));
     _listing = completion;
     _listEntries.clear();
+    ++_catalogRequests;
+    _catalogEntries = _catalogRecognized = _catalogIgnored = _catalogPrefixed = 0;
+    _catalogComplete = false;
     _armWatchdog();
     try {
       await Future.any<void>([
@@ -807,19 +820,27 @@ class RecorderLongFileSync {
         return;
       }
       if (event is TelinkFileListEntry && _listing != null) {
+        ++_catalogEntries;
+        ++_catalogRecognized;
+        if (event.hadDirectory) ++_catalogPrefixed;
         if (_listEntries.length >= 10000)
           throw const FormatException('catalog_limit');
         final entry = event.entry;
-        final old = _listEntries[entry.remoteName];
-        if (old != null && old.size != entry.size)
+        final key = '${entry.sessionId}:${entry.part}';
+        final old = _listEntries[key];
+        if (old != null &&
+            (old.size != entry.size || old.remoteName != entry.remoteName))
           throw const FormatException('catalog_conflict');
-        _listEntries[entry.remoteName] = entry;
+        _listEntries[key] = entry;
         _armWatchdog();
       } else if (event is TelinkFileListEnd && _listing != null) {
+        _catalogComplete = true;
         if (!_listing!.isCompleted) {
           _listing!.complete(_listEntries.values.toList());
         }
       } else if (event is TelinkOtherFile && _listing != null) {
+        ++_catalogEntries;
+        ++_catalogIgnored;
         _armWatchdog();
       } else if (event is TelinkFileSize && _download != null) {
         final download = _download!;

@@ -36,8 +36,16 @@ sealed class TelinkLongFileEvent {
     }
     final fields = text.split(RegExp(r'\s+'));
     if (fields.length < 2) throw const FormatException('file_entry_fields');
-    final match = RegExp(r'^/?longops_s([0-9]{1,19})_p([0-9]{1,6})\.ops$')
-        .firstMatch(fields[0]);
+    final path = fields[0];
+    final components = path.split('/');
+    // 官方先取basename；仅接受普通目录前缀，路径不进入下载或本地存储。
+    if (path.contains('\\') ||
+        path.runes.any((c) => c < 32 || c == 127) ||
+        components.any((p) => p == '.' || p == '..')) {
+      return const TelinkOtherFile();
+    }
+    final name = components.last;
+    final match = _fileName.firstMatch(name);
     // 目录可以同时列出其它类型文件；不下载、不改写它们。
     if (match == null) return const TelinkOtherFile();
     final session = int.tryParse(match[1]!);
@@ -53,14 +61,30 @@ sealed class TelinkLongFileEvent {
         size > maximumSegmentBytes) {
       throw const FormatException('file_entry_values');
     }
-    return TelinkFileListEntry(RecorderLongFileEntry(session, part, size));
+    return TelinkFileListEntry(
+        RecorderLongFileEntry(session, part, size, remoteName: name),
+        hadDirectory: path.contains('/'));
   }
 
   // 本地资源界限，不宣称是固件容量。
   static const maximumSegmentBytes = 256 * 1024 * 1024;
+  static final _fileName =
+      RegExp(r'^longops_s([0-9]{1,19})_p([0-9]{1,6})\.ops$');
   static Uint8List listCommand() => Uint8List.fromList([0x11, 0x22]);
-  static Uint8List readCommand(RecorderLongFileEntry file) =>
-      Uint8List.fromList([0x11, 0x26, ...utf8.encode(file.remoteName)]);
+  static Uint8List readCommand(RecorderLongFileEntry file) {
+    final match = _fileName.firstMatch(file.remoteName);
+    if (match == null ||
+        match.end != file.remoteName.length ||
+        int.tryParse(match[1]!) != file.sessionId ||
+        int.tryParse(match[2]!) != file.part ||
+        file.sessionId <= 0 ||
+        file.sessionId > 0x7fffffffffffffff ||
+        file.part < 0 ||
+        file.part > 99999) {
+      throw const FormatException('file_read_name');
+    }
+    return Uint8List.fromList([0x11, 0x26, ...utf8.encode(file.remoteName)]);
+  }
 }
 
 class TelinkFileSize extends TelinkLongFileEvent {
@@ -82,5 +106,6 @@ class TelinkOtherFile extends TelinkLongFileEvent {
 
 class TelinkFileListEntry extends TelinkLongFileEvent {
   final RecorderLongFileEntry entry;
-  TelinkFileListEntry(this.entry);
+  final bool hadDirectory;
+  TelinkFileListEntry(this.entry, {this.hadDirectory = false});
 }
