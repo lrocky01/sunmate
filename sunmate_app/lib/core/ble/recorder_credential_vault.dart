@@ -62,6 +62,43 @@ class RecorderCandidateKeyStore implements RecorderKeyStore {
   }
 }
 
+/// 新协商的key在回调和云同步之前持久化为独立待验证版本。
+class RecorderRebindingKeyStore extends RecorderCandidateKeyStore {
+  final RecorderCredentialVault vault;
+  final RecorderSavedIdentity identity;
+  RecorderCredentialSelection? _selection;
+  RecorderCredentialSelection? get selection => _selection;
+  bool _saving = false;
+  String? _preservedValue;
+  RecorderRebindingKeyStore(this.vault, this.identity)
+      : super(identity.remoteId, identity.protocol);
+
+  @override
+  Future<void> write(String id, RecorderProtocol p, String value) async {
+    _check(id, p);
+    if (_value != null) throw StateError('新协商候选已保存');
+    if (selection == null) await preserveNegotiatedKey(value);
+    if (_preservedValue == null || !RecorderCredentialVault._same(_preservedValue!, value)) {
+      throw StateError('新协商候选与已归档版本不一致');
+    }
+    await super.write(id, p, value);
+  }
+
+  /// 卡片可能已经接受新公钥；取消后也保留派生结果，但不加载或启用它。
+  Future<void> preserveNegotiatedKey(String value) async {
+    if (_saving) throw StateError('新协商候选已保存或正在保存');
+    _saving = true;
+    _selection = await vault.prepare(identity, value, source: '重新建立业务绑定');
+    if (!_closed) _preservedValue = value;
+  }
+
+  @override
+  void close() {
+    _preservedValue = null;
+    super.close();
+  }
+}
+
 /// 旧v1密钥保持原位；新的凭据版本和活动引用放在独立Keychain条目。
 /// 单条设备记录保存所有版本。切换前写回滚日志，进程中断后先恢复旧引用。
 class RecorderCredentialVault implements RecorderKeyStore {
@@ -142,7 +179,7 @@ class RecorderCredentialVault implements RecorderKeyStore {
             entry['id'] is! String ||
             !RegExp(r'^[a-f0-9]{32}$').hasMatch(entry['id']) ||
             !ids.add(entry['id']) ||
-            !['旧本机凭据', '官方账号资料', '历史凭据'].contains(entry['source']) ||
+            !['旧本机凭据', '官方账号资料', '历史凭据', '重新建立业务绑定'].contains(entry['source']) ||
             entry['verified'] is! bool ||
             entry['created'] is! String ||
             DateTime.tryParse(entry['created']) == null ||
@@ -215,7 +252,7 @@ class RecorderCredentialVault implements RecorderKeyStore {
           RecorderSavedIdentity identity, String value,
           {required String source}) =>
       _serial(() async {
-        if (!['官方账号资料', '历史凭据'].contains(source) ||
+        if (!['官方账号资料', '历史凭据', '重新建立业务绑定'].contains(source) ||
             identity.protocol != RecorderProtocol.telink) {
           throw StateError('候选来源或协议无效');
         }
@@ -254,6 +291,49 @@ class RecorderCredentialVault implements RecorderKeyStore {
         await _put(slot, encoded);
         return RecorderCredentialSelection._(
             slot, entry['id'] as String, m['revision'] as int);
+      });
+
+  /// 发起新协商前先确认旧版本已归档且有空间，绝不清除旧活动引用。
+  Future<void> preserveForRebinding(RecorderSavedIdentity identity) =>
+      _serial(() async {
+        if (identity.protocol != RecorderProtocol.telink) {
+          throw StateError('该协议尚不支持显式重新绑定');
+        }
+        final slot = _slot(identity.remoteId, identity.protocol);
+        var m = await _readSlot(slot);
+        if (m == null) {
+          final old = await legacy.read(identity.remoteId, identity.protocol);
+          if (old == null) throw StateError('本机没有旧密钥，请使用普通添加或待验证版本恢复');
+          RecorderCryptography.decode32(old).fillRange(0, 32, 0);
+          final entry = _entry(old, '旧本机凭据', false);
+          m = {'version': 1, 'identity': identity.toJson(), 'revision': 0,
+            'active': entry['id'], 'entries': [entry]};
+        } else if (!RecorderSavedIdentity.fromJson(m['identity']).sameDevice(identity) ||
+            _active(m) == null) {
+          throw StateError('旧凭据身份不一致或没有活动版本，未重新协商');
+        }
+        if ((m['entries'] as List).length >= 32) {
+          throw StateError('凭据归档已满，未重新协商或删除旧版本');
+        }
+        final encoded = jsonEncode(m);
+        _decode(encoded, slot);
+        await _put(slot, encoded);
+      });
+
+  Future<void> loadPrepared(RecorderSavedIdentity identity,
+          RecorderCredentialSelection selection, RecorderCandidateKeyStore destination) =>
+      _serial(() async {
+        final slot = _slot(identity.remoteId, identity.protocol);
+        final m = await _readSlot(slot);
+        if (slot != selection._slot || m == null ||
+            m['revision'] != selection._revision ||
+            !RecorderSavedIdentity.fromJson(m['identity']).sameDevice(identity) ||
+            destination.deviceId.toLowerCase() != identity.remoteId.toLowerCase() ||
+            destination.protocol != identity.protocol) {
+          throw StateError('新绑定待验证版本已变化，未加载或切换');
+        }
+        final entry = (m['entries'] as List).singleWhere((e) => e['id'] == selection._version);
+        await destination.write(identity.remoteId, identity.protocol, entry['secret'] as String);
       });
 
   /// 调用者必须先完成当前连接AES；此回调同时防止取消、断连或账号过期后提交。

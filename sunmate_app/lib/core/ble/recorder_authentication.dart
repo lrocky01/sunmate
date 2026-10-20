@@ -109,6 +109,9 @@ class RecorderAccountSession {
   /// 用户明确选择的独立凭据候选；只能做真实身份挑战，不执行首次协商。
   final bool credentialCandidate;
   final String credentialOrigin;
+  /// 独立入口的一次性确认；不改变普通恢复和首次绑定的旧key保护。
+  final bool reestablishBinding;
+  final void Function()? claimRebinding;
   final RecorderScanIdentity? newDeviceIdentity;
   final Future<bool> Function(String deviceId, RecorderProtocol protocol,
       String detectedSerial, RecorderKeyStore store)? restoreKey;
@@ -120,7 +123,8 @@ class RecorderAccountSession {
   RecorderAccountSession(this.serialNumber, this.verifier, this.committer,
       {this.restoreKey, this.hasRecoverableKey = false, this.isOfflineBackup = false,
       this.credentialCandidate = false, this.credentialOrigin = '官方账号资料', this.newDeviceIdentity,
-      this.matchesExistingKey, this.validateCurrent});
+      this.matchesExistingKey, this.validateCurrent,
+      this.reestablishBinding = false, this.claimRebinding});
 }
 
 enum RecorderAuthenticationState {
@@ -139,6 +143,8 @@ class RecorderAuthentication {
   final RecorderKeyStore store;
   final ManufacturerVerifier? verifier;
   final PairingCommitter? committer;
+  /// 有效配对回执经真实X25519派生后调用；取消后也可能到达，只能安全归档，不能启用或发网络请求。
+  final Future<void> Function(String)? onNegotiatedKey;
   /// 本地key落盘后记录待验证路由；不接收或复制密钥值。
   final Future<void> Function(String serialNumber)? onKeySaved;
   final RecorderCryptography _crypto;
@@ -156,6 +162,7 @@ class RecorderAuthentication {
     this.verifier,
     this.committer,
     this.onKeySaved,
+    this.onNegotiatedKey,
     RecorderCryptography? cryptography,
   }) : _crypto = cryptography ?? RecorderCryptography();
 
@@ -232,6 +239,8 @@ class RecorderAuthentication {
       throw StateError('拒绝失败、未经请求或缺少公钥的配对回执');
     }
     final secret = await _crypto.sharedSecret(phoneKey, params['public_key']);
+    // 显式重绑的持久化回调在取消检查之前执行，保留卡片可能已接受的新key。
+    await onNegotiatedKey?.call(base64Encode(secret));
     _checkActive();
     final existing = await store.read(deviceId, protocol);
     _checkActive();

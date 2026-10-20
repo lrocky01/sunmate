@@ -11,6 +11,7 @@ class RecorderAccountSheet extends ConsumerStatefulWidget {
   final YoooClawAccount? account;
   final ValueChanged<AccountRecorderDevice>? onSelectDevice;
   final VoidCallback? onAddDevice;
+  final VoidCallback? onRebindDevice;
   final bool closeAccountOnDispose;
   final Future<bool> Function()? onReconnectVerified;
   final Widget? savedIdentitySection;
@@ -19,6 +20,7 @@ class RecorderAccountSheet extends ConsumerStatefulWidget {
       this.account,
       this.onSelectDevice,
       this.onAddDevice,
+      this.onRebindDevice,
       this.onReconnectVerified,
       this.savedIdentitySection,
       this.closeAccountOnDispose = true});
@@ -394,6 +396,14 @@ class _RecorderAccountSheetState extends ConsumerState<RecorderAccountSheet> {
                         icon: const Icon(Icons.add),
                         label: const Text('添加新录音卡')),
                     const Text('用于账号列表中尚无记录的卡片。已有设备请选择下方记录；添加不会自动解绑或重置卡片。'),
+                    if (widget.onRebindDevice != null) ...[
+                      OutlinedButton.icon(
+                          onPressed: _busy || _account.hasPendingUnbind || !_hardwareIdle()
+                              ? null : widget.onRebindDevice,
+                          icon: const Icon(Icons.key_outlined),
+                          label: const Text('重新建立业务绑定（保留旧版本）')),
+                      const Text('用于账号已无这张卡、但本机仍有旧密钥的情况。搜索并核对SN后还需单独确认；可能改变卡内密钥，不会自动解绑。'),
+                    ],
                     const SizedBox(height: 20),
                   ],
                   const Text(

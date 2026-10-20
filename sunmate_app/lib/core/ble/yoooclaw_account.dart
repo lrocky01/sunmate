@@ -754,6 +754,16 @@ class YoooClawAccount {
   }
 
   RecorderAccountSession sessionForNewDevice(RecorderScanIdentity identity) {
+    return _newDeviceSession(identity);
+  }
+
+  /// 仅由用户核对SN并明确确认的重新绑定入口调用。
+  RecorderAccountSession sessionForRebinding(RecorderScanIdentity identity) {
+    return _newDeviceSession(identity, reestablishBinding: true);
+  }
+
+  RecorderAccountSession _newDeviceSession(RecorderScanIdentity identity,
+      {bool reestablishBinding = false}) {
     final serial = identity.serialNumber;
     final revision = _revision;
     void ensureCurrent(String sn) {
@@ -776,7 +786,7 @@ class YoooClawAccount {
       throw const OfficialAccountException('扫描记录已过期，请重新搜索录音卡');
     }
     return _sessionForSelection(serial, identity.deviceName, ensureCurrent,
-        newDeviceIdentity: identity);
+        newDeviceIdentity: identity, reestablishBinding: reestablishBinding);
   }
 
   RecorderAccountSession _sessionForSelection(String serial, String deviceName,
@@ -784,8 +794,10 @@ class YoooClawAccount {
       {String? uuid,
       bool hasRecoverableKey = false,
       bool credentialCandidate = false,
+      bool reestablishBinding = false,
       RecorderScanIdentity? newDeviceIdentity}) {
     String? checkedMac;
+    var rebindingClaimed = false;
     return RecorderAccountSession(
         serial,
         ({required checkContent, required mac, required sn}) async {
@@ -838,6 +850,14 @@ class YoooClawAccount {
         },
         hasRecoverableKey: hasRecoverableKey,
         credentialCandidate: credentialCandidate,
+        reestablishBinding: reestablishBinding,
+        claimRebinding: !reestablishBinding ? null : () {
+          ensureCurrent(serial);
+          if (rebindingClaimed) {
+            throw const OfficialAccountException('本次重新绑定确认已使用，请重新核对设备并确认');
+          }
+          rebindingClaimed = true;
+        },
         newDeviceIdentity: newDeviceIdentity,
         validateCurrent: () => ensureCurrent(serial),
         matchesExistingKey: newDeviceIdentity != null ? null : (id, protocol, store) async {

@@ -266,7 +266,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   String get audioStatistics =>
       '通知=$_audioNotificationCount；接收字节=$_audioReceivedBytes；会话外忽略=$_audioOutsideSession；最近完整录音帧=$_lastAudioFrameCount';
   String get diagnosticText => [
-        'SunMate 1.0.28+29',
+        'SunMate 1.0.29+30',
         '通知回传: 已接收=$_notificationsDelivered；已忽略=$_notificationsIgnored；无效=$_notificationsInvalid',
         '长录文件通道: $_fileChannelReady；同步中=${longFileLibrary.busy}；待重连=${longFileLibrary.needsReconnect}；本机可播放=${longFileLibrary.recordings.where((r) => r.canPlay).length}',
         '当前阶段: $_phase',
@@ -483,6 +483,15 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       {bool isAutoReconnect = false, RecorderAccountSession? accountSession,
       RecorderRecoveryCandidate? recoveryCandidate}) {
     if (_disposed) return Future.value(false);
+    if (accountSession?.reestablishBinding ?? false) {
+      if (isAutoReconnect || isLinkConnected || _isRecording ||
+          recoveryCandidate != null || accountSession!.newDeviceIdentity == null ||
+          accountSession.claimRebinding == null || accountSession.credentialCandidate ||
+          accountSession.isOfflineBackup || _keyStore is! RecorderCredentialVault) {
+        lastErrorMessage = '请从独立重新绑定入口核对并确认；未启动协商或改动活动密钥';
+        return Future.value(false);
+      }
+    }
     if (accountSession?.credentialCandidate ?? false) {
       if (isLinkConnected || recoveryCandidate != null ||
           accountSession!.newDeviceIdentity != null || accountSession.isOfflineBackup ||
@@ -516,8 +525,10 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   Future<bool> _connectAccountDevice(BluetoothDevice device, bool automatic,
       RecorderAccountSession? session, RecorderRecoveryCandidate? recovery) async {
     final expectedGeneration = _generation + 1;
+    RecorderRebindingKeyStore? negotiated;
     final connected =
-        await _connectDevice(device, automatic, accountSession: session, recovery: recovery);
+        await _connectDevice(device, automatic, accountSession: session, recovery: recovery,
+            onRebindingPrepared: (store) => negotiated = store);
     if (connected ||
         session == null ||
         _cancelReconnect ||
@@ -532,16 +543,48 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
       return false;
     }
     _log('真实密钥已保存且账号已同步；断开一次，用新挑战验证后才报告连接成功');
+    RecorderAccountSession? verification;
+    RecorderSavedIdentity? completingRebinding;
+    if (session.reestablishBinding) {
+      final saved = negotiated;
+      final selection = saved?.selection;
+      if (saved == null || selection == null) {
+        lastErrorMessage = '新绑定材料未能安全保存，未切换旧凭据；请保留诊断';
+        await _startDisconnect();
+        return false;
+      }
+      final vault = _keyStore as RecorderCredentialVault;
+      completingRebinding = saved.identity;
+      verification = RecorderAccountSession(saved.identity.serialNumber,
+          ({required checkContent, required mac, required sn}) async =>
+              throw StateError('新绑定验证阶段不重复验机'),
+          ({required sn, required mac, required sharedSecret}) async =>
+              throw StateError('新绑定验证阶段不重复云绑定'),
+          credentialCandidate: true, credentialOrigin: '重新建立业务绑定',
+          hasRecoverableKey: true, validateCurrent: session.validateCurrent,
+          restoreKey: (id, protocol, sn, store) async {
+            session.validateCurrent?.call();
+            if (id.toLowerCase() != saved.identity.remoteId.toLowerCase() ||
+                protocol != saved.identity.protocol || sn != saved.identity.serialNumber ||
+                store is! RecorderCandidateKeyStore) throw StateError('新绑定验证身份不匹配');
+            await vault.loadPrepared(saved.identity, selection, store);
+            session.validateCurrent?.call();
+            return true;
+          });
+    }
     await _startDisconnect(reconnecting: true);
     if (_cancelReconnect || _generation != expectedGeneration + 1 || _disposed)
       return false;
-    return _connectDevice(device, true, retainDiagnostics: true);
+    return _connectDevice(device, true, retainDiagnostics: true,
+        accountSession: verification, completingRebinding: completingRebinding);
   }
 
   Future<bool> _connectDevice(BluetoothDevice device, bool automatic,
       {RecorderAccountSession? accountSession,
       RecorderRecoveryCandidate? recovery,
-      bool retainDiagnostics = false}) async {
+      bool retainDiagnostics = false,
+      void Function(RecorderRebindingKeyStore)? onRebindingPrepared,
+      RecorderSavedIdentity? completingRebinding}) async {
     final generation = ++_generation;
     final cancellation = Completer<void>();
     _connectCancellation = cancellation;
@@ -622,6 +665,10 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
               scannedSerials.length != 1 ||
               scannedSerials.single != newIdentity.serialNumber)) {
         throw const OfficialAccountException('首次绑定的扫描身份不匹配或已过期，请重新搜索');
+      }
+      if (accountSession?.reestablishBinding ?? false) {
+        accountSession!.validateCurrent?.call();
+        accountSession.claimRebinding!();
       }
       await FlutterBluePlus.stopScan();
       await _clearSubscriptions();
@@ -778,10 +825,45 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         _log('加密备份已匹配本次广播SN和GATT；本机材料已保存，仍待真实AES验证');
       }
       RecorderKeyStore authenticationStore = _keyStore;
+      if (completingRebinding != null) {
+        if (completingRebinding.remoteId.toLowerCase() != device.remoteId.str.toLowerCase() ||
+            completingRebinding.protocol != profile.protocol ||
+            !(accountSession?.credentialCandidate ?? false) ||
+            accountSession?.serialNumber != completingRebinding.serialNumber ||
+            (_advertisedSerial != null && _advertisedSerial != completingRebinding.serialNumber)) {
+          throw StateError('新绑定验证回执与当前连接不匹配');
+        }
+        _serialNumber = completingRebinding.serialNumber;
+        _advertisedSerial = completingRebinding.serialNumber;
+        _serialSource = '本次重绑已匹配身份（待AES验证）';
+      }
+      if (accountSession?.reestablishBinding ?? false) {
+        if (newIdentity == null || profile.protocol != RecorderProtocol.telink ||
+            _advertisedSerial != newIdentity.serialNumber || scannedSerials.length != 1) {
+          throw StateError('重新绑定需要本次真实广播SN与完整Telink GATT匹配');
+        }
+        final identity = RecorderSavedIdentity(remoteId: device.remoteId.str,
+            serialNumber: newIdentity.serialNumber, protocol: profile.protocol,
+            deviceName: _deviceName.length <= 64 ? _deviceName : '录音卡');
+        final known = (await _identityStore.readAll()).where(
+            (r) => r.remoteId.toLowerCase() == identity.remoteId.toLowerCase());
+        if (known.any((r) => !r.sameDevice(identity))) throw StateError('旧身份记录不匹配，未重新协商');
+        _checkGeneration(generation);
+        accountSession!.validateCurrent?.call();
+        final vault = _keyStore as RecorderCredentialVault;
+        await vault.preserveForRebinding(identity);
+        _checkGeneration(generation);
+        accountSession.validateCurrent?.call();
+        final candidate = RecorderRebindingKeyStore(vault, identity);
+        _candidateStore = candidate;
+        authenticationStore = candidate;
+        onRebindingPrepared?.call(candidate);
+        _log('显式重新绑定：旧凭据已安全归档，使用独立空候选；不清卡、不覆盖旧密钥');
+      }
       if (accountSession?.credentialCandidate ?? false) {
         if (profile.protocol != RecorderProtocol.telink ||
             _advertisedSerial == null ||
-            scannedSerials.length != 1 ||
+            (completingRebinding == null && scannedSerials.length != 1) ||
             accountSession!.restoreKey == null ||
             accountSession.serialNumber != _advertisedSerial) {
           throw StateError('候选验证需要当前新鲜广播SN与完整Telink GATT匹配');
@@ -826,6 +908,8 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         protocol: profile.protocol,
         deviceId: device.remoteId.str,
         store: authenticationStore,
+        onNegotiatedKey: authenticationStore is RecorderRebindingKeyStore
+            ? authenticationStore.preserveNegotiatedKey : null,
         onKeySaved: (serial) async {
           _checkGeneration(generation);
           if (serial != _serialNumber) throw StateError('密钥已保存但SN不匹配，未记录恢复身份');
@@ -1231,6 +1315,9 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
           : error is OfficialAccountException
               ? error.message
               : '业务鉴权失败或设备材料无效；未报告连接成功';
+      if (_activeAccountSession?.reestablishBinding ?? false) {
+        lastErrorMessage = '$lastErrorMessage；旧活动凭据保留。卡片密钥可能已改变，请检查本机待验证版本；未自动重试';
+      }
       _log(lastErrorMessage!);
       _finishWaiting(false);
     });
@@ -1429,6 +1516,10 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         !_channelsReady ||
         !isLinkConnected ||
         _isConnected) return;
+    if (_activeAccountSession?.reestablishBinding ?? false) {
+      // 协商回执和云同步不是AES验收；使用持久化候选断开后验证一次。
+      return;
+    }
     final generation = _generation;
     final selection = _credentialSelection;
     if (selection != null) {

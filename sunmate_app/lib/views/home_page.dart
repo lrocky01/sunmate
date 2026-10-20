@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ble/ble_constants.dart';
 import '../core/ble/ble_protocol.dart';
 import '../core/ble/yoooclaw_account.dart';
+import '../core/ble/recorder_authentication.dart';
 import '../core/ble/recorder_saved_identity.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../providers/device_provider.dart';
@@ -30,7 +31,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.28+29 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.29+30 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -408,7 +409,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.28+29', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.29+30', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
@@ -464,6 +465,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
   late final DeviceNotifier _deviceNotifier;
   AccountRecorderDevice? _selectedAccountDevice;
   bool _addingNewDevice = false;
+  bool _reestablishingBinding = false;
   bool _showAccountForm = false;
   bool _isConnecting = false;
   String? _connectingDeviceName;
@@ -642,6 +644,38 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
     } else {
       unawaited(_refreshRecovery());
     }
+  }
+
+  Future<RecorderAccountSession?> _confirmRebinding(RecorderScanIdentity identity) async {
+    final notifier = _deviceNotifier;
+    if (notifier.isBleLinkConnected || notifier.isBleConnecting ||
+        notifier.activeDriver.isRecording || notifier.activeDriver.isPaused) {
+      throw const OfficialAccountException('请先结束当前录音和连接，再核对重新绑定');
+    }
+    // 确认前正常刷新账号列表，不依据旧页面或本机缓存猜测云端解绑已完成。
+    await _account.loadBindings();
+    if (!mounted) return null;
+    final session = _account.sessionForRebinding(identity);
+    final confirmed = await showDialog<bool>(context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('重新建立业务绑定？'),
+          content: SingleChildScrollView(child: Text(
+              '${identity.deviceName}\nSN：${identity.serialNumber}\n\n'
+              '旧凭据会先安全归档保留。此次将通过本人官方账号真实验机，并与卡片重新协商密钥；可能改变卡内密钥，旧备份不保证继续有效。\n\n'
+              '新密钥先保存为待验证版本，真实AES及通道验证通过后才启用。失败或取消会保留本机资料，但不能回滚卡内密钥。\n\n'
+              '不会自动解绑、重试协商或删除卡片原始录音。')),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('确认重新绑定')),
+          ],
+        ));
+    if (confirmed != true || !mounted) return null;
+    if (notifier.isBleLinkConnected || notifier.isBleConnecting ||
+        notifier.activeDriver.isRecording || notifier.activeDriver.isPaused) {
+      throw const OfficialAccountException('连接或录音状态已变化，未启动重新绑定');
+    }
+    session.validateCurrent?.call();
+    return session;
   }
 
   Widget _recoveryTile(RecorderRecoveryCandidate candidate) => ListTile(
@@ -836,6 +870,19 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
           ++_recoveryRequest;
           setState(() {
             _addingNewDevice = true;
+            _reestablishingBinding = false;
+            _selectedRecovery = null;
+            _recoveryCandidates = [];
+            _loadingRecovery = false;
+            _recoveryError = null;
+          });
+          _startScan();
+        },
+        onRebindDevice: () {
+          ++_recoveryRequest;
+          setState(() {
+            _addingNewDevice = true;
+            _reestablishingBinding = true;
             _selectedRecovery = null;
             _recoveryCandidates = [];
             _loadingRecovery = false;
@@ -874,6 +921,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                     unawaited(FlutterBluePlus.stopScan());
                     setState(() {
                       _addingNewDevice = false;
+                      _reestablishingBinding = false;
                       _selectedAccountDevice = null;
                       _selectedRecovery = null;
                       _connectionError = null;
@@ -884,10 +932,10 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(_addingNewDevice ? '添加新录音卡' : '录音卡连接设置',
+                    Text(_reestablishingBinding ? '重新绑定录音卡' : _addingNewDevice ? '添加新录音卡' : '录音卡连接设置',
                         style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 2),
-                    Text(_addingNewDevice ? '搜索附近卡片并验证身份' : 'SN：${_selectedAccountDevice?.serialNumber ?? _selectedRecovery!.identity.serialNumber}',
+                    Text(_reestablishingBinding ? '核对SN后单独确认' : _addingNewDevice ? '搜索附近卡片并验证身份' : 'SN：${_selectedAccountDevice?.serialNumber ?? _selectedRecovery!.identity.serialNumber}',
                         style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                   ],
                 )),
@@ -1136,7 +1184,7 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
-                              child: const Text("连接"),
+                              child: Text(_reestablishingBinding ? '重新绑定' : '连接'),
                               onPressed: () async {
                                 if (_isConnecting || devNotifier.isBleConnecting) return;
 
@@ -1158,10 +1206,18 @@ class _BleDevicePickerModalState extends ConsumerState<RecorderConnectionSheet> 
                                   if (_addingNewDevice && identity == null) {
                                     throw const OfficialAccountException('未取得新鲜且完整的 C·ONE 广播，请重新搜索后选择');
                                   }
+                                  RecorderAccountSession? rebinding;
+                                  if (_reestablishingBinding) {
+                                    rebinding = await _confirmRebinding(identity!);
+                                    if (rebinding == null) {
+                                      if (mounted) setState(() => _isConnecting = false);
+                                      return;
+                                    }
+                                  }
                                   ok = await devNotifier.connectDevice(item.device,
-                                      accountSession: _addingNewDevice
+                                      accountSession: rebinding ?? (_addingNewDevice
                                           ? _account.sessionForNewDevice(identity!)
-                                          : _account.sessionForDevice(_selectedAccountDevice!));
+                                          : _account.sessionForDevice(_selectedAccountDevice!)));
                                 } on OfficialAccountException catch (error) {
                                   operationError = error.message;
                                 } catch (_) {
