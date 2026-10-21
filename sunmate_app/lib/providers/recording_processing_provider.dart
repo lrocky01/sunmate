@@ -8,6 +8,7 @@ import '../core/recordings/local_content_store.dart';
 import '../core/recordings/recording_processing_controller.dart';
 import 'device_provider.dart';
 import 'server_config_provider.dart';
+import 'archive_sync_provider.dart';
 
 final recordingContentStoreProvider =
     Provider<RecordingContentStore>((ref) => FileRecordingContentStore());
@@ -24,6 +25,7 @@ final recordingProcessingProvider =
       audio: ref.watch(recordingLocalAudioProvider),
       asr: () => ref.read(asrServiceProvider),
       agent: () => ref.read(agentClientProvider),
+      archive: ref.read(archiveSyncProvider),
       allowsNotification: manager.appPolicy.allows);
   final signals =
       ref.read(deviceFactoryProvider).bleDriver.segmentSignals.listen((signal) {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/recording_processing_provider.dart';
+import '../providers/archive_sync_provider.dart';
 
 class RecordingProcessingLifecycle extends ConsumerStatefulWidget {
   final Widget child;
@@ -21,6 +22,7 @@ class _RecordingProcessingLifecycleState
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    ref.read(archiveSyncProvider).setForeground(state == AppLifecycleState.resumed);
     ref
         .read(recordingProcessingProvider)
         .setForeground(state == AppLifecycleState.resumed);
@@ -34,6 +36,7 @@ class _RecordingProcessingLifecycleState
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(archiveSyncProvider);
     ref.watch(recordingProcessingProvider);
     return widget.child;
   }

@@ -1,4 +1,5 @@
 import 'notification_apps_page.dart';
+import 'archive_sync_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -143,6 +144,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          ListTile(
+            leading: const Icon(Icons.sync),
+            title: const Text('私有资料同步'),
+            subtitle: const Text('自动归档、补传与服务器回执'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(
+                builder: (_) => const ArchiveSyncPage())),
+          ),
           // 0. 私有直连服务器配置 (MOSS-ASR + Hermes Agent)
           const Text("私有服务器直连配置 (无需任何第三方中转)",
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
@@ -226,7 +235,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     controller: _hermesUrlController,
                     onChanged: (_) => _configDirty = true,
                     decoration: const InputDecoration(
-                      labelText: "Hermes 地址 (例: http://your-ip:8080/v1)",
+                      labelText: "Hermes 地址 (例: https://your-domain/v1)",
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
@@ -237,7 +246,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     onChanged: (_) => _configDirty = true,
                     obscureText: true,
                     decoration: const InputDecoration(
-                      labelText: "Hermes 访问密钥 / Token (可选，防盗用)",
+                      labelText: "Hermes API_SERVER_KEY (必填)",
                       border: OutlineInputBorder(),
                       isDense: true,
                     ),
@@ -280,7 +289,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          "点击复制以下指令，直接发给你的 Hermes 智能体对话框。它将自动安装 5 大专属技能并启动端点，向你汇报地址与密钥：",
+                          "复制指令并发送给 Hermes 智能体，安装 5 个技能并检查原生 API。未启用服务或缺少手机端点时会提示配置；密钥请在服务器本机安全查看。",
                           style: TextStyle(fontSize: 11, color: Colors.black87, height: 1.4),
                         ),
                         const SizedBox(height: 8),
@@ -591,18 +600,22 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   void _copyHermesSetupPrompt(BuildContext context) {
-    const prompt = """请作为我的随身智能体，执行以下命令一键配置并启动 SunMate 专属随身第二大脑端点：
-curl -fsSL https://raw.githubusercontent.com/lrocky01/sunmate/main/sunmate-hermes/setup_hermes.sh | bash
+    const prompt = r"""请在已经安装 Hermes 的服务器上，为 SunMate 安装五个技能并检查 Hermes 原生 API。先下载并检查安装入口，再执行：
+task_dir="$(mktemp -d)"
+curl --fail --show-error --location --retry 3 --connect-timeout 15 --max-time 60 https://raw.githubusercontent.com/lrocky01/sunmate/main/sunmate-hermes/setup_hermes.sh --output "$task_dir/setup_hermes.sh"
+bash -n "$task_dir/setup_hermes.sh"
+检查下载的脚本内容后，运行 bash "$task_dir/setup_hermes.sh"。
 
-安装并启动完成后，请直接告诉我：
-1. 你的局域网/公网端点地址 (如 http://192.168.x.x:8080/v1)
-2. 安全访问 Token
-我将直接填入手机 SunMate App 设置页进行连接。""";
+若存在多个 profile，请选择实际使用的 profile 并传入 --profile NAME。脚本不修改 Hermes 核心配置；若原生 API 未启用，请说明缺少的配置，不启动替代网关。需要重启时先说明影响，再根据我的授权使用 --restart-native。
+
+请分别报告技能安装、API 鉴权、真实推理和手机可达性的验证结果。服务器回环地址不能作为手机地址；尚无手机可访问端点时明确说明，并协助确认 HTTPS 反代或安全隧道。
+
+只告诉我已验证的完整端点（包含 /v1 及实际 profile 前缀），以及如何在服务器本机安全查看目标 profile 的 API_SERVER_KEY。不要把 Token 输出到对话或日志。服务器自检通过后，我会在手机 SunMate App 设置页填写地址和密钥并再次测试连接。""";
 
     Clipboard.setData(const ClipboardData(text: prompt));
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("✓ 已复制 Hermes 接入指令！请在与 Hermes 的对话框或终端中粘贴发送。"),
+        content: Text("✓ 已复制 Hermes 接入指令，请发送给 Hermes 智能体。"),
         backgroundColor: Colors.purple,
         duration: Duration(seconds: 4),
       ),

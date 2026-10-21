@@ -1,94 +1,115 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# ☀️ SunMate 专属 Hermes 智能体随身第二大脑一键接入与自启动程序
-# 包含：
-#  1. 核心 Skills 安装 (成长复盘、会议纪要分离、通知简报、情境记忆检索、全链路探活)
-#  2. HTTP/SSE OpenAI 兼容网关后台守护启动 (0.0.0.0:8080)
-#  3. 本机 IP 探测与配置信息自动输出 (供手机 App 直接填写)
-# ==============================================================================
-
+# Local checkout, offline package and curl | bash share this entry.
 set -euo pipefail
 
-HERMES_DIR="${HERMES_HOME:-$HOME/.hermes}"
-TARGET_SKILLS_DIR="$HERMES_DIR/skills"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILLS_SOURCE_DIR="$SCRIPT_DIR/skills"
-PORT="${1:-8080}"
-TOKEN="${2:-sunmate_$(openssl rand -hex 4 2>/dev/null || echo 'sec8899')}"
-
-echo "=========================================================="
-echo "      ☀️ SunMate (阳光智伴) 专属 Hermes 接入配置向导"
-echo "=========================================================="
-echo "[1/4] 检查并配置 Hermes 技能目录..."
-
-if ! mkdir -p "$TARGET_SKILLS_DIR" 2>/dev/null; then
-  HERMES_DIR="$SCRIPT_DIR/.hermes"
-  TARGET_SKILLS_DIR="$HERMES_DIR/skills"
-  mkdir -p "$TARGET_SKILLS_DIR"
-fi
-echo "  目标技能目录: $TARGET_SKILLS_DIR"
-
-# 1. 复制全套 5 大核心技能
-for skill in lifelog-daily-review meeting-diarize-process notification-digest context-memory-query sunmate-doctor; do
-  if [[ -d "$SKILLS_SOURCE_DIR/$skill" ]]; then
-    cp -r "$SKILLS_SOURCE_DIR/$skill" "$TARGET_SKILLS_DIR/"
-    echo "  ✓ 已挂载专属技能: $skill"
-  fi
-done
-
-echo ""
-echo "[2/4] 检查 Python 运行依赖 (fastapi, uvicorn)..."
-if ! python3 -c "import fastapi, uvicorn" 2>/dev/null; then
-  echo "  正在安装极简服务依赖 (fastapi uvicorn)..."
-  pip3 install fastapi uvicorn -q 2>/dev/null || pip install fastapi uvicorn -q 2>/dev/null || true
-fi
-echo "  ✓ Python 依赖检查完成！"
-
-echo ""
-echo "[3/4] 启动 SunMate 直连网关后台守护进程 (端口: $PORT)..."
-
-# 检查端口是否已被占用，若有旧实例则优雅重启
-OLD_PID=$(lsof -ti :$PORT 2>/dev/null || true)
-if [[ -n "$OLD_PID" ]]; then
-  echo "  发现旧服务 (PID: $OLD_PID)，正在重启..."
-  kill -9 $OLD_PID 2>/dev/null || true
-  sleep 1
-fi
-
-export HERMES_TOKEN="$TOKEN"
-nohup python3 "$SCRIPT_DIR/sunmate_hermes_server.py" --host 0.0.0.0 --port "$PORT" > "$HERMES_DIR/sunmate_gateway.log" 2>&1 &
-NEW_PID=$!
-sleep 2
-
-# 验证探活
-if kill -0 $NEW_PID 2>/dev/null; then
-  echo "  ✓ 直连网关已成功在后台启动！(PID: $NEW_PID, 日志: $HERMES_DIR/sunmate_gateway.log)"
-else
-  echo "  ✗ 启动异常，请检查 $HERMES_DIR/sunmate_gateway.log"
+if ! command -v hermes >/dev/null 2>&1; then
+  echo "错误：请先安装 Hermes 并将 hermes 命令加入 PATH；SunMate 不安装 Hermes。" >&2
   exit 1
 fi
-
-echo ""
-echo "[4/4] 探测网络与端点配置..."
-
-# 探测局域网 IP
-LOCAL_IP=""
-if [[ "$(uname)" == "Darwin" ]]; then
-  LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "127.0.0.1")
-else
-  LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")
+PYTHON_BIN="${SUNMATE_PYTHON:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  echo "错误：需要 Python 3.9+，可用 SUNMATE_PYTHON 指向已有解释器。" >&2
+  exit 1
+fi
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_SOURCE" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  if [[ -f "$SCRIPT_DIR/installer.py" && -f "$SCRIPT_DIR/manifest.json" ]]; then
+    exec "$PYTHON_BIN" "$SCRIPT_DIR/installer.py" "$@"
+  fi
 fi
 
-echo "=========================================================="
-echo "🎉 Hermes 智能体接入配置完成！请将以下信息填入手机 App："
-echo "=========================================================="
-echo ""
-echo "📱 局域网直连模式 (手机与电脑在同一 Wi-Fi):"
-echo "  👉 Hermes 端点地址: http://${LOCAL_IP}:${PORT}/v1"
-echo "  👉 安全访问 Token: ${TOKEN}"
-echo ""
-echo "🌐 外网/穿透模式 (在外随时随地使用):"
-echo "  若使用 Cloudflare Tunnel、frp、cpolar 或 Nginx 反代，请将外部访问域名映射至本地端口 ${PORT}，"
-echo "  并在手机 App 中填入: https://<你的公网域名>/v1"
-echo ""
-echo "=========================================================="
+# Resolve main once; all files must come from the same commit. Download and hash
+# every file before running the installer. No installer input comes from stdin.
+"$PYTHON_BIN" - "$@" <<'PY'
+import concurrent.futures
+import hashlib
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+if sys.version_info < (3, 9):
+    raise SystemExit("错误：需要 Python 3.9+。")
+REPOSITORY = "lrocky01/sunmate"
+MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def download(url):
+    request = urllib.request.Request(url, headers={"User-Agent": "SunMate-Installer/2"})
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                data = response.read(MAX_FILE_BYTES + 1)
+                if len(data) > MAX_FILE_BYTES:
+                    raise ValueError("下载文件超过大小限制")
+                return data
+        except urllib.error.HTTPError as error:
+            if error.code < 500 and error.code != 429:
+                raise ValueError(f"下载失败 HTTP {error.code}；请检查该版本是否已发布") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
+        if attempt < 2:
+            time.sleep(attempt + 1)
+    raise ValueError("下载失败，已重试三次；可改用完整离线安装包")
+
+
+def main():
+    try:
+        result = subprocess.run(["hermes", "--version"], stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ValueError("Hermes 不可运行或超时；未下载或安装任何资源") from None
+    if result.returncode:
+        raise ValueError("Hermes 不可运行；未下载或安装任何资源")
+    ref = os.environ.get("SUNMATE_REF", "main")
+    if ref != "main" and not re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        raise ValueError("SUNMATE_REF 仅接受 main 或完整的 Git commit SHA")
+    if ref == "main":
+        ref = json.loads(download(f"https://api.github.com/repos/{REPOSITORY}/commits/main"))["sha"]
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        raise ValueError("无法确认安装版本的 commit SHA")
+    print(f"正在下载 SunMate 接入包，固定版本 {ref[:12]}…", flush=True)
+    base = f"https://raw.githubusercontent.com/{REPOSITORY}/{ref}/sunmate-hermes"
+    manifest_bytes = download(f"{base}/manifest.json")
+    manifest = json.loads(manifest_bytes)
+    files = manifest.get("files", {})
+    if manifest.get("product") != "sunmate-hermes" or not isinstance(files, dict) or not 1 <= len(files) <= 50:
+        raise ValueError("安装清单无效")
+    if "installer.py" not in files:
+        raise ValueError("安装清单缺少 installer.py")
+    for name, digest in files.items():
+        path = PurePosixPath(name)
+        if path.is_absolute() or not path.parts or any(p in ("..", ".") for p in path.parts) or "\\" in name:
+            raise ValueError("安装清单包含无效路径")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("安装清单包含无效 SHA-256")
+    with tempfile.TemporaryDirectory(prefix="sunmate-install-") as temporary:
+        root = Path(temporary)
+        def fetch(item):
+            name, expected = item
+            data = download(f"{base}/{name}")
+            if hashlib.sha256(data).hexdigest() != expected:
+                raise ValueError(f"完整性校验失败：{name}")
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(fetch, files.items()))
+        (root / "manifest.json").write_bytes(manifest_bytes)
+        print("下载与 SHA-256 校验通过。", flush=True)
+        return subprocess.run([sys.executable, str(root / "installer.py"), *sys.argv[1:]]).returncode
+
+
+try:
+    sys.exit(main())
+except (ValueError, KeyError, TypeError, OSError) as error:
+    print(f"错误：{error}", file=sys.stderr)
+    sys.exit(1)
+PY

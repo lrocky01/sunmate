@@ -352,6 +352,7 @@ class SavedRecordingSummary {
   final bool partial;
   final DateTime? from, to;
   final List<String> inputIds;
+  final Map<String, String> sourceVersions;
   SavedRecordingSummary(
       {required this.id,
       required this.kind,
@@ -360,6 +361,7 @@ class SavedRecordingSummary {
       required this.text,
       required this.created,
       required this.inputIds,
+      this.sourceVersions = const {},
       this.partial = false,
       this.from,
       this.to});
@@ -372,9 +374,16 @@ class SavedRecordingSummary {
         'partial': partial,
         'from': from?.toUtc().toIso8601String(),
         'to': to?.toUtc().toIso8601String(),
-        'inputIds': inputIds
+        'inputIds': inputIds,
+        'sourceVersions': sourceVersions,
       };
   factory SavedRecordingSummary.fromJson(Map<String, dynamic> v) {
+    final versions = Map<String, String>.from(v['sourceVersions'] ?? {});
+    if (versions.length > 100000 ||
+        versions.entries.any((e) =>
+            e.key.length > 1100 ||
+            !RegExp(r'^[a-f0-9]{64}$').hasMatch(e.value)))
+      throw const FormatException('总结来源版本无效');
     if (!['meeting', 'lifelog', 'intermediate', 'notification']
             .contains(v['kind']) ||
         v['text'] is! String ||
@@ -410,6 +419,7 @@ class SavedRecordingSummary {
         text: v['text'],
         created: DateTime.parse(v['created']),
         inputIds: List<String>.from(v['inputIds']),
+        sourceVersions: versions,
         partial: v['partial'],
         from: v['from'] == null ? null : DateTime.parse(v['from']),
         to: v['to'] == null ? null : DateTime.parse(v['to']));

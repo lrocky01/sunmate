@@ -217,7 +217,16 @@ extension NotificationDigestProcessing on RecordingProcessingController {
           await _saveNotificationJob(job);
           _changed();
           final epoch = _notificationPolicyGeneration;
-          final text = await _generateNotificationText(job, entries, epoch);
+          final sourceVersions =
+              await _summarySourceVersions(entries.map((e) => e.id).toSet());
+          final text = (archive?.referenceEnabled ?? false)
+              ? await agent().summarizeArchiveReferences(
+                  await archive!
+                      .ensureReferences(entries.map((e) => e.id).toSet()),
+                  task: 'notification',
+                  from: job.range.from.toUtc().toIso8601String(),
+                  to: job.range.to.toUtc().toIso8601String())
+              : await _generateNotificationText(job, entries, epoch);
           if (disposed) return;
           _checkNotificationEpoch(epoch);
           await _verifyNotificationInputs(job);
@@ -232,6 +241,7 @@ extension NotificationDigestProcessing on RecordingProcessingController {
               text: text,
               created: notificationClock(),
               inputIds: job.inputIds,
+              sourceVersions: sourceVersions,
               from: job.range.from,
               to: job.range.to);
           await content.put('summaries', saved.id, saved.toJson());

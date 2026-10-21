@@ -1,0 +1,62 @@
+{
+  "product": "sunmate-hermes",
+  "version": "2.2.0",
+  "appVersion": "1.0.33+34",
+  "transport": "Hermes native /v1/chat/completions + opt-in /sunmate/v1 archive; same HTTP listener",
+  "requests": {
+    "meeting": {
+      "format": "legacy_text",
+      "skill": "meeting-diarize-process",
+      "acceptMissingMetadata": true
+    },
+    "lifelog": {
+      "format": "legacy_text",
+      "skill": "lifelog-daily-review",
+      "acceptMissingMetadata": true
+    },
+    "notification": {
+      "format": "sunmate.data.v1",
+      "task": "notification_digest",
+      "skill": "notification-digest",
+      "fragments": true,
+      "batchSourceType": "notification_digest_batch"
+    },
+    "intermediate": {
+      "format": "legacy_text",
+      "marker": "这是供最终汇总的局部资料",
+      "phase": "partial"
+    },
+    "chat": {
+      "format": "user_and_recent_history",
+      "includesPhoneDatabase": false
+    }
+  },
+  "boundaries": {
+    "notificationAutoUpload": true,
+    "serverArchiveApi": true,
+    "automaticMemoryWrites": false,
+    "asrManagedByInstaller": false,
+    "bluetoothManagedByInstaller": false,
+    "appChangesRequiredToAcceptCurrentRequests": false
+  },
+  "validation": {
+    "streamProbe": "opt_in",
+    "businessToolExecution": "separate_user_test",
+    "phoneReachability": "requires_phone_test"
+  },
+  "archive": {
+    "schema": "sunmate.archive.v1",
+    "referenceRequest": "sunmate.reference.v1",
+    "implementedLocally": true,
+    "defaultInstalled": false,
+    "deployed": false,
+    "requiresAppRebuild": false,
+    "rawAudioUpload": false,
+    "hostPluginVerified": false,
+    "receiverTransport": "native api_server platform handler; same Hermes listener",
+    "separateReceiverProcessRequired": false,
+    "separateClientCredentialRequired": true,
+    "prepareCommand": "python3 prepare_archive.py --hermes-home CHOSEN_HOME --initialize-archive",
+    "automaticSyncDefault": false
+  }
+}

@@ -20,6 +20,7 @@ Future<String> contentFingerprint(Object value) async =>
 class FileRecordingContentStore implements RecordingContentStore {
   final Future<Directory> Function() root;
   Future<void> _writes = Future<void>.value();
+  int sourceGeneration = 0;
   FileRecordingContentStore({Future<Directory> Function()? root})
       : root = root ??
             (() async => Directory(
@@ -34,7 +35,9 @@ class FileRecordingContentStore implements RecordingContentStore {
     'settings',
     'hidden',
     'attempts',
-    'notification_jobs'
+    'notification_jobs',
+    'archive_outbox',
+    'archive_state'
   };
   Future<Directory> _directory(String collection) async {
     if (!_collections.contains(collection))
@@ -99,6 +102,7 @@ class FileRecordingContentStore implements RecordingContentStore {
       await temporary.create(exclusive: true);
       await temporary.writeAsString(encoded, flush: true);
       await temporary.rename(file.path);
+      if (!collection.startsWith('archive_')) sourceGeneration++;
     });
     _writes = task.then<void>((_) {}, onError: (Object _, StackTrace __) {});
     return task;

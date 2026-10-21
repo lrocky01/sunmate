@@ -1,0 +1,29 @@
+{
+  "product": "sunmate-hermes",
+  "version": "2.2.0",
+  "files": {
+    "ARCHIVE.md": "5942d451273c3c72d802637e2b35875393d543d3688d2db77c6b4a95e73bd726",
+    "README.md": "f1b722f4d42e28c7183a44ab7f363d45323577fd2d405bb739cdb5ea9602ef09",
+    "archive_runtime/__init__.py": "847d571392d93bcae6b866070f3cace333d6c9b12ad9fa1f5d79b694f8f2dcc6",
+    "archive_runtime/native_api.py": "b1a04c3096a7e08c1a33321028f8c040afb3e42e7442f90b0607168c4d52f2d5",
+    "archive_runtime/plugin.py": "d71d272d6d8099cb4ec1201e5c49d4a2190442f79b086d0db04aba8821ee351d",
+    "archive_runtime/plugin.yaml": "b779c3e5abe1be738d79e45778845f889024c6eaf6a195cb7676c5435f495d70",
+    "archive_runtime/service.py": "b87873eed5c985c7f97a438f146f7ce0065db7b3b4e7b3349eea75ca07407764",
+    "archive_runtime/store.py": "ea41b05ebe12d6e9cea2b8166ae1cbf469f5f7051310a8ce5a211af18d87dfc9",
+    "compatibility.json": "25223be9335ed70467a16f349b55d37c798dd7bedb784b0de3040ce538b6402a",
+    "install_to_hermes.sh": "27b9ce40f3acac5c5576795070c352a470cdd56a5a0d7b320b0f2cd955dd4e03",
+    "installer.py": "35da4d2199c793401c3d632fabd864d43a9cece6879f42ca441b12b238eecbb1",
+    "prepare_archive.py": "bed943c254b5092560c4b7ee64b40069850951307375c66ae9909d9e7d9ad217",
+    "setup_hermes.sh": "e42268fe57c783d2b1403a7143ec6f36a35e7ba29c28797e891cd7188630bb5d",
+    "skills/context-memory-query/SKILL.md": "5e5205f73f765fcdda23c21701604a45b650ba39ee4bfd0daf7cbe5477c72999",
+    "skills/context-memory-query/references/data-contract.md": "092bf1a8b29ab47ea2ad47a0fded32a6bda6d3cab926c03e975c141a778b2d50",
+    "skills/lifelog-daily-review/SKILL.md": "67b283f99dc6a9c5068755b44c3ee773cdfffeb788348e708907016d3d416ddb",
+    "skills/lifelog-daily-review/references/data-contract.md": "092bf1a8b29ab47ea2ad47a0fded32a6bda6d3cab926c03e975c141a778b2d50",
+    "skills/meeting-diarize-process/SKILL.md": "afa7cfd90a93862c5abd687972f53028172915a77a45b73354adcd5c61e4c19b",
+    "skills/meeting-diarize-process/references/data-contract.md": "092bf1a8b29ab47ea2ad47a0fded32a6bda6d3cab926c03e975c141a778b2d50",
+    "skills/notification-digest/SKILL.md": "463d630cf0c11abe229cc0464f6bd23b0b902c406ac21691be8f7b6d97f7487c",
+    "skills/notification-digest/references/data-contract.md": "092bf1a8b29ab47ea2ad47a0fded32a6bda6d3cab926c03e975c141a778b2d50",
+    "skills/sunmate-doctor/SKILL.md": "d528a6e0ac40e1d0d0a6b04b92adba84d0f1b2f43b35951249ad88a3ee034fec",
+    "skills/sunmate-doctor/references/data-contract.md": "092bf1a8b29ab47ea2ad47a0fded32a6bda6d3cab926c03e975c141a778b2d50"
+  }
+}

@@ -11,6 +11,8 @@ import '../../models/timeline_entry.dart';
 import 'local_content_store.dart';
 import 'recording_processing_models.dart';
 import 'notification_digest_models.dart';
+import '../sync/archive_models.dart';
+import '../sync/archive_projection.dart';
 part 'notification_digest_processing.dart';
 
 class RecordingProcessingException implements Exception {
@@ -27,6 +29,7 @@ class RecordingProcessingController extends ChangeNotifier {
   final RecorderLocalAudio audio;
   final AsrService Function() asr;
   final AgentClient Function() agent;
+  final ArchiveReferenceResolver? archive;
   final bool Function(String appId) allowsNotification;
   final Map<String, ProcessingSession> _sessions = {};
   final Map<String, ProcessingPart> _parts = {};
@@ -77,6 +80,7 @@ class RecordingProcessingController extends ChangeNotifier {
       required this.audio,
       required this.asr,
       required this.agent,
+      this.archive,
       bool Function(String)? allowsNotification,
       DateTime Function()? notificationClock})
       : notificationClock = notificationClock ?? DateTime.now,
@@ -86,6 +90,12 @@ class RecordingProcessingController extends ChangeNotifier {
   void _changed() {
     if (!disposed) notifyListeners();
   }
+
+  Future<Map<String, String>> _summarySourceVersions(Set<String> ids) async => {
+        for (final source in await projectArchive(content, allowsNotification))
+          if (source.visible && source.aliases.any(ids.contains))
+            source.id: await source.sha
+      };
 
   Future<void> _saveSession(ProcessingSession s) =>
       content.put('sessions', s.id, s.toJson());
@@ -810,17 +820,33 @@ class RecordingProcessingController extends ChangeNotifier {
       throw const RecordingProcessingException('会议录音未识别到有效语音，未生成纪要。');
     final existing = _summaries[fingerprint];
     if (existing != null) return existing;
-    final reduced = await _reduceInputs([
-      for (final p in parts)
-        '[片段${p.source.part + 1}, 相对${p.offsetMs}ms；${timingLabel(p)}]\n${transcript(p)!.spans.isEmpty ? transcript(p)!.text : transcript(p)!.spans.map((v) => "[${v.start}-${v.end}s ${v.speaker}] ${v.text}").join("\n")}\n${transcript(p)!.message ?? ""}'
-    ], 'meeting');
-    final result = await agent().summarizeMeetingWithDiarization(
-        segments: const [],
-        rawText:
-            '以下是同一场会议各段；段内说话人编号不代表跨段同一人，不确定时间只作相对顺序。\n${reduced.join('\n')}');
-    final text = result['summary'];
-    if (text is! String || text.trim().isEmpty)
-      throw const RecordingProcessingException('未收到完整会议纪要。');
+    final sourceVersions =
+        await _summarySourceVersions(parts.map((p) => p.id).toSet());
+    String text;
+    final sourceIds = parts.map((p) => p.id).toSet();
+    ArchiveReferences? archived;
+    if (archive?.referenceEnabled ?? false) {
+      archived = automatic && !archive!.automaticMeetingSync
+          ? await archive!.existingReferences(sourceIds)
+          : await archive!.ensureReferences(sourceIds);
+    }
+    if (archived != null) {
+      text =
+          await agent().summarizeArchiveReferences(archived, task: 'meeting');
+    } else {
+      final reduced = await _reduceInputs([
+        for (final p in parts)
+          '[片段${p.source.part + 1}, 相对${p.offsetMs}ms；${timingLabel(p)}]\n${transcript(p)!.spans.isEmpty ? transcript(p)!.text : transcript(p)!.spans.map((v) => "[${v.start}-${v.end}s ${v.speaker}] ${v.text}").join("\n")}\n${transcript(p)!.message ?? ""}'
+      ], 'meeting');
+      final result = await agent().summarizeMeetingWithDiarization(
+          segments: const [],
+          rawText:
+              '以下是同一场会议各段；段内说话人编号不代表跨段同一人，不确定时间只作相对顺序。\n${reduced.join('\n')}');
+      final value = result['summary'];
+      if (value is! String || value.trim().isEmpty)
+        throw const RecordingProcessingException('未收到完整会议纪要。');
+      text = value;
+    }
     final saved = SavedRecordingSummary(
         id: fingerprint,
         kind: 'meeting',
@@ -828,7 +854,8 @@ class RecordingProcessingController extends ChangeNotifier {
         inputFingerprint: fingerprint,
         text: text,
         created: DateTime.now(),
-        inputIds: parts.map((p) => p.id).toList());
+        inputIds: parts.map((p) => p.id).toList(),
+        sourceVersions: sourceVersions);
     await content.put('summaries', saved.id, saved.toJson());
     _summaries[saved.id] = saved;
     _changed();
@@ -947,19 +974,28 @@ class RecordingProcessingController extends ChangeNotifier {
         .where((e) => e.sourceType != TimelineSourceType.appNotification)
         .map(line)
         .toList();
+    final sourceVersions =
+        await _summarySourceVersions(entries.map((e) => e.id).toSet());
     if (allowPartial && (uncertain > 0 || active))
       voices.insert(0, '[范围说明] 本次仅使用已定位、已关闭的内容；仍有未定位或未完成录音，不代表全量。');
-    final text = await agent().generateDailyLifelogReview(
-        timeBlockEvents: await _reduceInputs(voices, 'lifelog-voice',
-            notificationEpoch: notificationEpoch),
-        notifications: await _reduceInputs(
-            entries
-                .where(
-                    (e) => e.sourceType == TimelineSourceType.appNotification)
-                .map(line)
-                .toList(),
-            'lifelog-notifications',
-            notificationEpoch: notificationEpoch));
+    final text = (archive?.referenceEnabled ?? false)
+        ? await agent().summarizeArchiveReferences(
+            await archive!.ensureReferences(entries.map((e) => e.id).toSet()),
+            task: 'lifelog',
+            from: from.toUtc().toIso8601String(),
+            to: to.toUtc().toIso8601String(),
+            partial: allowPartial && (uncertain > 0 || active))
+        : await agent().generateDailyLifelogReview(
+            timeBlockEvents: await _reduceInputs(voices, 'lifelog-voice',
+                notificationEpoch: notificationEpoch),
+            notifications: await _reduceInputs(
+                entries
+                    .where((e) =>
+                        e.sourceType == TimelineSourceType.appNotification)
+                    .map(line)
+                    .toList(),
+                'lifelog-notifications',
+                notificationEpoch: notificationEpoch));
     _checkNotificationEpoch(notificationEpoch);
     final saved = SavedRecordingSummary(
         id: fingerprint,
@@ -972,6 +1008,7 @@ class RecordingProcessingController extends ChangeNotifier {
             : text,
         created: DateTime.now(),
         inputIds: entries.map((e) => e.id).toList(),
+        sourceVersions: sourceVersions,
         partial: allowPartial && (uncertain > 0 || active),
         from: from,
         to: to);

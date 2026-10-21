@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/ai/agent_client.dart';
 import '../core/ai/asr_service.dart';
 import '../models/server_config.dart';
+import 'archive_sync_provider.dart';
 
 class ServerConfigNotifier extends StateNotifier<ServerConfig> {
   final ServerConfigStore _store;
@@ -132,7 +133,14 @@ final asrServiceProvider = Provider<AsrService>((ref) {
 /// 3. 全局 Hermes Agent 客户端 Provider (响应配置动态变更)
 final agentClientProvider = Provider<AgentClient>((ref) {
   final config = ref.watch(serverConfigProvider);
+  final archive = ref.watch(archiveSyncProvider);
   return AgentClient(
+    archiveContext: archive.referenceEnabled
+        ? {
+            'libraryId': archive.config.identity['libraryId'],
+            'profile': archive.config.identity['profile'],
+          }
+        : null,
     hermesBaseUrl: config.hermesBaseUrl,
     apiKey: config.hermesToken.isNotEmpty ? config.hermesToken : null,
   );

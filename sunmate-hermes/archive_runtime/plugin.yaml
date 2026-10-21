@@ -1,0 +1,4 @@
+name: sunmate-archive
+version: 1.0.0
+description: Receive private SunMate records on the native API listener and provide read-only query tools.
+author: SunMate
