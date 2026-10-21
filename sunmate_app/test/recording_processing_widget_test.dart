@@ -152,10 +152,20 @@ void main() {
                 find.byWidgetPredicate((w) => w is FilledButton))
             .onPressed,
         isNull);
-    await tester.runAsync(() async {
-      await tester.tap(find.text('播放本段'));
-      await Future<void>.delayed(const Duration(milliseconds: 30));
-    });
+    await tester.runAsync(() => tester.tap(find.text('播放本段')));
+    await tester.pump();
+    // 文件校验/封装需要真实 I/O；pumpAndSettle 的虚拟时钟不能等它完成。
+    // 以操作结束状态为准，避免把 CI 磁盘速度假定为固定 30ms。
+    final playButton = find.byWidgetPredicate((w) => w is OutlinedButton).first;
+    for (var i = 0; i < 100; i++) {
+      await tester.runAsync(() =>
+          Future<void>.delayed(const Duration(milliseconds: 50)));
+      await tester.pump();
+      if (tester.widget<OutlinedButton>(playButton).onPressed != null) break;
+    }
+    expect(tester.widget<OutlinedButton>(playButton).onPressed, isNotNull,
+        reason: '本段校验及播放操作应完成，不能停留在处理中');
+    expect(find.byType(LinearProgressIndicator), findsNothing);
     await tester.pumpAndSettle();
     expect(f.audio.calls, 1);
     expect(f.asr.submits, 0);
