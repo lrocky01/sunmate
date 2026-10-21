@@ -6,13 +6,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/audio/recorder_local_audio.dart';
 import '../core/hardware/ainote_6095_driver.dart';
 import '../core/hardware/recorder_long_file_models.dart';
+import '../core/hardware/recorder_long_recordings.dart';
 import '../providers/device_provider.dart';
 
 /// 卡片长录与本机归档共用一个列表；未完成校验的文件不能播放。
 class RecorderLongFilesPage extends ConsumerStatefulWidget {
   final AiNote6095Driver? driver;
   final RecorderLocalAudio? audio;
-  const RecorderLongFilesPage({super.key, this.driver, this.audio});
+  final LongRecordingPurpose? purposeFilter;
+  const RecorderLongFilesPage({super.key, this.driver, this.audio, this.purposeFilter});
 
   @override
   ConsumerState<RecorderLongFilesPage> createState() =>
@@ -179,6 +181,8 @@ class _RecorderLongFilesState extends ConsumerState<RecorderLongFilesPage> {
   @override
   Widget build(BuildContext context) {
     final library = _driver.longFileLibrary;
+    final records = library.recordings.where((r) =>
+        widget.purposeFilter == null || r.purpose == widget.purposeFilter).toList();
     final scheme = Theme.of(context).colorScheme;
     final connectionHint = !_driver.isConnected
         ? '未连接卡片。手机上已保存的录音仍可播放；连接并完成身份验证后可读取卡片目录。'
@@ -190,7 +194,8 @@ class _RecorderLongFilesState extends ConsumerState<RecorderLongFilesPage> {
                     ? '卡片录音状态尚未确认，请先在录音设置中读取卡片状态。'
                     : '已连接卡片。保存会保留卡片原始录音，断连后可继续恢复。';
     return Scaffold(
-      appBar: AppBar(title: const Text('长录文件与播放')),
+      appBar: AppBar(title: Text(widget.purposeFilter == null
+          ? '长录文件与播放' : '${widget.purposeFilter!.label}录音与播放')),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -225,14 +230,14 @@ class _RecorderLongFilesState extends ConsumerState<RecorderLongFilesPage> {
             const SizedBox(height: 24),
             Text('录音文件', style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 8),
-            if (!_loading && library.recordings.isEmpty)
+            if (!_loading && records.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 child: Text(library.loaded
                     ? '暂无录音文件。可读取卡片目录查看最新分段。'
                     : '尚未读取到录音文件。已保存的音频会显示在这里。'),
               ),
-            for (final record in library.recordings) ...[
+            for (final record in records) ...[
               _recordRow(record),
               const Divider(height: 24),
             ],

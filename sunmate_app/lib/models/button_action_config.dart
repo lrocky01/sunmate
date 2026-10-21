@@ -3,7 +3,7 @@ enum CustomActionBehavior {
   none,              // 无动作
   pushToTalk,        // 长按对讲 (直连 AI 智能体对话)
   toggleRecording,   // 开始/结束会议录音
-  toggleLifeLog,     // 开启/关闭随身记录 (全天模式)
+  toggleLifeLog,     // 旧枚举保留兼容，仅切换本机通知采集
   bookmark,          // 录音/时光打标 (标记重点时刻)
   queryBattery,      // 播报/查询设备电量
 }
@@ -16,7 +16,7 @@ extension CustomActionBehaviorExt on CustomActionBehavior {
       case CustomActionBehavior.toggleRecording:
         return "开始/结束会议录音";
       case CustomActionBehavior.toggleLifeLog:
-        return "开启/关闭随身记录 (全天时光机)";
+        return "开启/关闭本机通知采集";
       case CustomActionBehavior.bookmark:
         return "灵感打标 (标记当前重点时刻)";
       case CustomActionBehavior.queryBattery:
@@ -37,7 +37,7 @@ class ButtonActionConfig {
   const ButtonActionConfig({
     this.singleClick = CustomActionBehavior.bookmark,        // 单击: 会议录音标签记录 (打标)
     this.doubleClick = CustomActionBehavior.toggleRecording, // 双击: 会议录音开启/结束
-    this.tripleClick = CustomActionBehavior.toggleLifeLog,   // 三击: 随身时光机开启/结束
+    this.tripleClick = CustomActionBehavior.toggleLifeLog,   // 旧自定义动作：本机通知采集
     this.longPress = CustomActionBehavior.pushToTalk,        // 长按: 即时说与 Hermes 对话
   });
 

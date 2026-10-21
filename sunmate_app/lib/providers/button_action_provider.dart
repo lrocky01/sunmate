@@ -13,6 +13,8 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
   StreamSubscription? _audioSub;
   final List<int> _recordedBuffer = [];
   bool _isCollectingVoice = false;
+  String? _voiceMessageId;
+  ChatNotifier? _voiceChat;
 
   ButtonActionNotifier(this._ref) : super(const ButtonActionConfig()) {
     _bindDriverEvents();
@@ -21,6 +23,7 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
   void _bindDriverEvents() {
     _buttonSub?.cancel();
     _audioSub?.cancel();
+    cancelVoiceCapture();
 
     final factory = _ref.read(deviceFactoryProvider);
     final driver = factory.activeDriver;
@@ -57,18 +60,25 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
         _executeAction(state.tripleClick);
         break;
       case ButtonActionType.pressDown:
-        if (state.longPress == CustomActionBehavior.pushToTalk) {
+        if (state.longPress == CustomActionBehavior.pushToTalk &&
+            !_isCollectingVoice) {
           _isCollectingVoice = true;
           _recordedBuffer.clear();
-          _ref.read(chatProvider.notifier).setListeningState(true);
+          _voiceChat = _ref.read(chatProvider.notifier);
+          _voiceMessageId = _voiceChat!.beginVoiceInput();
         }
         break;
       case ButtonActionType.release:
         if (_isCollectingVoice) {
           _isCollectingVoice = false;
-          _ref.read(chatProvider.notifier).setListeningState(false);
+          final chat = _voiceChat;
+          final id = _voiceMessageId;
+          _voiceMessageId = null;
+          chat?.finishVoiceInput();
           final audioBytes = Uint8List.fromList(_recordedBuffer);
-          _ref.read(chatProvider.notifier).handleVoiceInput(audioBytes);
+          _recordedBuffer.clear();
+          if (chat != null && id != null)
+            unawaited(chat.handleVoiceInput(audioBytes, voiceMessageId: id));
         }
         break;
       case ButtonActionType.longPress:
@@ -77,11 +87,17 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
         }
         break;
       case ButtonActionType.cancel:
-        _isCollectingVoice = false;
-        _recordedBuffer.clear();
-        _ref.read(chatProvider.notifier).setListeningState(false);
+        cancelVoiceCapture();
         break;
     }
+  }
+
+  void cancelVoiceCapture() {
+    _isCollectingVoice = false;
+    _recordedBuffer.clear();
+    final id = _voiceMessageId;
+    _voiceMessageId = null;
+    if (id != null) _voiceChat?.cancelVoiceInput(id);
   }
 
   void _executeAction(CustomActionBehavior behavior) {
@@ -115,12 +131,14 @@ class ButtonActionNotifier extends StateNotifier<ButtonActionConfig> {
 
   @override
   void dispose() {
+    cancelVoiceCapture();
     _buttonSub?.cancel();
     _audioSub?.cancel();
     super.dispose();
   }
 }
 
-final buttonActionProvider = StateNotifierProvider<ButtonActionNotifier, ButtonActionConfig>((ref) {
+final buttonActionProvider =
+    StateNotifierProvider<ButtonActionNotifier, ButtonActionConfig>((ref) {
   return ButtonActionNotifier(ref);
 });

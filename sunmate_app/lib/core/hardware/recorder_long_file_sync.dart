@@ -8,6 +8,7 @@ import '../ble/telink_long_files.dart';
 import 'recorder_long_file_models.dart';
 import 'recorder_long_file_store.dart';
 import 'recorder_long_recordings.dart';
+import '../recordings/recording_processing_models.dart';
 
 class _FileSyncFailure implements Exception {
   final String message;
@@ -37,6 +38,7 @@ class RecorderLongFileSync {
   final String Function() serialNumber;
   final LongRecordingPurpose? Function(int) purpose;
   final void Function() onChanged;
+  final void Function(RecordingSegmentSignal)? onSegmentSignal;
   final Duration progressTimeout;
   final Duration tailInterval;
   final int maximumTailScans;
@@ -89,6 +91,7 @@ class RecorderLongFileSync {
       required this.serialNumber,
       required this.purpose,
       required this.onChanged,
+      this.onSegmentSignal,
       this.progressTimeout = const Duration(seconds: 15),
       this.tailInterval = const Duration(seconds: 1),
       this.autoSyncDelay = const Duration(milliseconds: 250),
@@ -108,6 +111,15 @@ class RecorderLongFileSync {
 
   void _changed() {
     if (!_disposed) onChanged();
+  }
+
+  void _signal(SegmentSignalKind kind, int session,
+      {RecorderCommittedSegment? source, int? totalParts}) {
+    try {
+      onSegmentSignal?.call(RecordingSegmentSignal(
+          kind, serialNumber(), session,
+          purpose: purpose(session), source: source, totalParts: totalParts));
+    } catch (_) {/* 派生结果失败不能中断蓝牙传输。 */}
   }
 
   String _key(String sn, int session) => '$sn:$session';
@@ -153,6 +165,8 @@ class RecorderLongFileSync {
   }
 
   void connectionLost() {
+    if (_activeSession != null)
+      _signal(SegmentSignalKind.uncertain, _activeSession!);
     _markActiveUnconfirmed();
     ++_generation;
     _watchdog?.cancel();
@@ -183,13 +197,18 @@ class RecorderLongFileSync {
 
   /// LONG start 和带会话身份的当前状态；恢复时不能借用上次连接的闭合证明。
   void recordingStarted(int session,
-      {int? activePart, Future<void>? preparation}) {
+      {int? activePart, Future<void>? preparation, bool newRecording = false}) {
     if (!isReady() || session <= 0 || _stoppedSessions.contains(session))
       return;
     if (preparation != null) _sessionPreparations[session] = preparation;
     if (_activeSession != session) {
       _markActiveUnconfirmed();
       _activeSession = session;
+      _signal(
+          newRecording
+              ? SegmentSignalKind.started
+              : SegmentSignalKind.uncertain,
+          session);
       _activePart = null;
       _closedParts.clear();
       _pendingLive = false;
@@ -210,6 +229,7 @@ class RecorderLongFileSync {
         _activePart = activePart;
         advanced = true;
       } else if (activePart < _activePart!) {
+        _signal(SegmentSignalKind.uncertain, session);
         // 不能把回退状态当成已经关闭，撤销本次推断并等待新的可靠提示。
         _activePart = null;
         _closedParts.clear();
@@ -279,6 +299,8 @@ class RecorderLongFileSync {
 
   /// 实时录音或无法匹配当前会话的状态不能借用LONG闭合证明。
   void recordingStateUnknown() {
+    if (_activeSession != null)
+      _signal(SegmentSignalKind.uncertain, _activeSession!);
     _markActiveUnconfirmed();
     _activeSession = null;
     _activePart = null;
@@ -434,7 +456,8 @@ class RecorderLongFileSync {
     _listing = completion;
     _listEntries.clear();
     ++_catalogRequests;
-    _catalogEntries = _catalogRecognized = _catalogIgnored = _catalogPrefixed = 0;
+    _catalogEntries =
+        _catalogRecognized = _catalogIgnored = _catalogPrefixed = 0;
     _catalogComplete = false;
     _armWatchdog();
     try {
@@ -583,6 +606,7 @@ class RecorderLongFileSync {
         }
         _check(generation, idle: false);
         committed[entry.part] = segment;
+        _signal(SegmentSignalKind.source, session, source: segment);
         record = record.copyWith(
             downloadedParts: committed.length,
             receivedBytes: committed.values.fold<int>(0, (a, e) => a + e.size),
@@ -687,6 +711,7 @@ class RecorderLongFileSync {
         });
         _check(generation);
         committed[entry.part] = part;
+        _signal(SegmentSignalKind.source, session, source: part);
         record = record.copyWith(
             downloadedParts: committed.length,
             receivedBytes:
@@ -739,6 +764,8 @@ class RecorderLongFileSync {
       await store.saveRecord(record);
       _check(generation);
       _setRecord(record);
+      _signal(SegmentSignalKind.finalized, session,
+          totalParts: record.totalParts);
       _message = '录音已保存到手机，可离线播放；卡片原始录音保留。';
     } catch (_) {
       final incomplete = record.copyWith(

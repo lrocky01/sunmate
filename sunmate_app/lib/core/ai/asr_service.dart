@@ -2,6 +2,12 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
+/// 对外仅提供固定提示，不带服务地址、凭据或响应正文。
+class AsrTranscriptionException implements Exception {
+  final String message;
+  const AsrTranscriptionException(this.message);
+}
+
 /// 说话人分段转写项 (来自 MOSS-Transcribe-Diarize)
 class DiarizedSegment {
   final String speaker; // 说话人标签, 例如 "Speaker 0", "Speaker 1"
@@ -97,15 +103,16 @@ class AsrService {
 
       final response = await _dio.post(url, data: formData, options: options);
       if (response.statusCode == 200 && response.data != null) {
-        if (response.data is Map) {
-          return response.data['text'] ?? "";
-        }
-        return response.data.toString();
+        final data = response.data;
+        final text = data is Map ? data['text'] : data;
+        if (text is String && text.trim().isNotEmpty) return text;
+        throw const AsrTranscriptionException('未识别到清晰语音，请重新说话。');
       }
-      return "转写异常: ${response.statusMessage}";
-    } catch (e) {
-      // 离线/服务未启动时的兜底提示
-      return "【本地 MOSS-ASR 离线】长按对讲语音已捕获 (${audioBytes.length} 字节)。请检查 ${serverBaseUrl} 服务状态。";
+      throw const AsrTranscriptionException('语音转写未完成，请检查 ASR 节点后重新说话。');
+    } on AsrTranscriptionException {
+      rethrow;
+    } catch (_) {
+      throw const AsrTranscriptionException('语音转写未完成，请检查 ASR 节点后重新说话。');
     }
   }
 
@@ -131,6 +138,27 @@ class AsrService {
     } catch (e) {
       return null;
     }
+  }
+
+  /// 从已校验的本机归档流式上传，长录音不整份读入内存。
+  Future<String?> submitJobFile(String path, {required String filename}) async {
+    try {
+      final response = await _dio.post(
+        "${serverBaseUrl.replaceAll(RegExp(r'/+$'), '')}/v1/jobs",
+        data: FormData.fromMap({
+          'file': await MultipartFile.fromFile(path, filename: filename),
+          'diarize': true,
+        }),
+        options: Options(headers: {
+          if (apiKey != null && apiKey!.isNotEmpty) 'Authorization': 'Bearer $apiKey',
+        }),
+      );
+      if ([200, 202].contains(response.statusCode) && response.data is Map) {
+        final id = response.data['job_id'] ?? response.data['id'];
+        if (id is String && id.isNotEmpty) return id;
+      }
+    } catch (_) { /* 保留本机文件，允许用户重试。 */ }
+    return null;
   }
 
   /// 4. 轮询异步任务状态与结果 (GET /v1/jobs/{id})

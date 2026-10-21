@@ -21,7 +21,8 @@ class RejectingNotificationManager extends MobileNotificationManager {
           required String title,
           required String message,
           String subtitle = '',
-          DateTime? timestamp}) =>
+          DateTime? timestamp,
+          String? notificationIdentity}) =>
       throw StateError('test-private-content');
 }
 
@@ -113,7 +114,9 @@ void main() {
     await settle();
     expect(notifications, hasLength(3));
     expect(notifications.first.content, contains('合成测试长通知' * 100));
-    expect(notifications.map((e) => e.id).toSet(), hasLength(3));
+    expect(notifications.map((e) => e.id).toSet(), hasLength(2));
+    expect(notifications[0].id, notifications[1].id); // 同UID更新同一持久记录。
+    expect(notifications[1].content, contains('相同UID的新正文'));
     expect(driver.isConnected, true);
   });
 

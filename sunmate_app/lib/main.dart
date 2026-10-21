@@ -1,14 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'providers/server_config_provider.dart';
+import 'core/notifications/mobile_notification_manager.dart';
 import 'views/home_page.dart';
 import 'views/chat_page.dart';
 import 'views/meeting_page.dart';
 import 'views/timeline_page.dart';
 import 'views/settings_page.dart';
 import 'views/recorder_connection_lifecycle.dart';
+import 'views/recording_processing_lifecycle.dart';
 
-void main() {
-  runApp(const ProviderScope(child: SunMateApp()));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final servers = ServerConfigNotifier();
+  await Future.wait([servers.ready, MobileNotificationManager().initialize()]);
+  runApp(ProviderScope(overrides: [
+    serverConfigProvider.overrideWith((ref) => servers),
+  ], child: const SunMateApp()));
 }
 
 class SunMateApp extends StatelessWidget {
@@ -30,7 +38,7 @@ class SunMateApp extends StatelessWidget {
           elevation: 0,
         ),
       ),
-      home: const RecorderConnectionLifecycle(child: RootNavigationContainer()),
+      home: const RecordingProcessingLifecycle(child: RecorderConnectionLifecycle(child: RootNavigationContainer())),
     );
   }
 }
@@ -60,7 +68,8 @@ class RootNavigationContainer extends ConsumerWidget {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: currentIndex,
-        onDestinationSelected: (idx) => ref.read(currentTabProvider.notifier).state = idx,
+        onDestinationSelected: (idx) =>
+            ref.read(currentTabProvider.notifier).state = idx,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.home_outlined),

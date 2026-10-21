@@ -1,3 +1,5 @@
+import 'notification_apps_page.dart';
+import 'recording_processing_pages.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -125,14 +127,8 @@ class RecorderManagementPage extends ConsumerWidget {
               _SettingsRow(
                   icon: Icons.apps_outlined,
                   title: '可采集的应用',
-                  value: '应用筛选待适配',
-                  onTap: () => _open(
-                      context,
-                      const _RecorderInfoPage(title: '可采集的应用', paragraphs: [
-                        '当前可查看 iPhone 通知服务授权状态，尚未接入按应用筛选通知的功能。',
-                        'Android 官方 App 的应用采集与 iPhone 通知服务是不同路径，不能直接复用其应用列表设置。',
-                        '这不影响录音卡实时采音；蓝牙诊断不记录通知正文。',
-                      ]))),
+                  value: '按收到的应用通知选择',
+                  onTap: () => _open(context, const NotificationAppsPage())),
               _SettingsRow(
                   icon: Icons.system_update_outlined,
                   title: '固件升级',
@@ -349,6 +345,7 @@ class _RecorderRecordingSettingsState
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          ListTile(contentPadding:EdgeInsets.zero,title:const Text('自动转写与总结'),subtitle:const Text('按用途设置；默认关闭'),trailing:const Icon(Icons.chevron_right),onTap:()=>Navigator.of(context).push(MaterialPageRoute(builder:(_)=>const RecordingProcessingSettingsPage()))),
           _LongRecordingPurposeSection(
               data: notifier.recorderLongRecordings,
               onChoose: notifier.chooseLongRecordingPurpose,

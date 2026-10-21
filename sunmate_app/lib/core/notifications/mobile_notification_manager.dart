@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'notification_app_policy.dart';
 import '../../models/timeline_entry.dart';
 
 /// 移动端原始通知消息模型 (对齐 Android 与 Hermes 规范)
@@ -31,17 +32,24 @@ class MobileNotificationEvent {
 
 /// 移动端系统通知拦截与过滤管理器 (跨平台适配)
 class MobileNotificationManager {
-  static final MobileNotificationManager _instance = MobileNotificationManager._internal();
+  static final MobileNotificationManager _instance =
+      MobileNotificationManager._internal();
   factory MobileNotificationManager() => _instance;
-  MobileNotificationManager._internal();
+  MobileNotificationManager._internal() : appPolicy = NotificationAppPolicy();
 
   /// 独立实例供本地回归/独立消费者使用，不关闭全局通知流。
-  MobileNotificationManager.isolated();
+  MobileNotificationManager.isolated({NotificationAppPolicy? policy})
+      : appPolicy = policy ?? NotificationAppPolicy();
+
+  final NotificationAppPolicy appPolicy;
+  bool _disposed = false;
 
   int _ancsSequence = 0;
 
-  final _notificationStreamController = StreamController<TimelineEntry>.broadcast();
-  Stream<TimelineEntry> get notificationStream => _notificationStreamController.stream;
+  final _notificationStreamController =
+      StreamController<TimelineEntry>.broadcast();
+  Stream<TimelineEntry> get notificationStream =>
+      _notificationStreamController.stream;
 
   // 常见噪音包名黑名单 (如系统无意义广播、输入法提示、电池监控等)
   final Set<String> _ignoredPackages = {
@@ -53,6 +61,7 @@ class MobileNotificationManager {
 
   /// 初始化通知监听服务
   Future<void> initialize() async {
+    await appPolicy.ready;
     if (Platform.isAndroid) {
       // Android 端: 检查是否已授予 NotificationListenerService 特殊权限
       // 真实设备可通过 MethodChannel 或 flutter_notification_listener 桥接
@@ -91,7 +100,7 @@ class MobileNotificationManager {
       tags: "外部通知",
     );
 
-    _notificationStreamController.add(entry);
+    _emitManaged(packageName, appName, entry);
   }
 
   /// 处理 iOS 端通过快捷指令 (Shortcuts) / 日程推送的通知消息
@@ -112,7 +121,7 @@ class MobileNotificationManager {
       tags: "外部通知",
     );
 
-    _notificationStreamController.add(entry);
+    _emitManaged('sunmate.shortcut', '快捷指令事件', entry);
   }
 
   /// 处理来自硬件 ANCS (Apple Notification Center Service) 蓝牙透传的 iOS 系统通知
@@ -122,8 +131,11 @@ class MobileNotificationManager {
     required String message,
     String subtitle = '',
     DateTime? timestamp,
+    String? notificationIdentity,
   }) {
-    if (message.trim().isEmpty && title.trim().isEmpty && subtitle.trim().isEmpty) return;
+    if (message.trim().isEmpty &&
+        title.trim().isEmpty &&
+        subtitle.trim().isEmpty) return;
     final entryTime = timestamp ?? DateTime.now();
     final appName = _resolveHumanFriendlyAppName(appIdentifier);
 
@@ -135,17 +147,46 @@ class MobileNotificationManager {
         message.contains("大促");
 
     final entry = TimelineEntry(
-      id: "ancs_${entryTime.millisecondsSinceEpoch}_${appIdentifier.hashCode}_${++_ancsSequence}",
+      id: notificationIdentity == null
+          ? "ancs_${entryTime.millisecondsSinceEpoch}_${appIdentifier.hashCode}_${++_ancsSequence}"
+          : "ancs_${entryTime.millisecondsSinceEpoch}_$notificationIdentity",
       timestamp: entryTime,
       sourceType: TimelineSourceType.appNotification,
       sourceApp: appName,
       content: title.isNotEmpty
-          ? "[$title]: ${[subtitle, message].where((s) => s.isNotEmpty).join('\n')}"
+          ? "[$title]: ${[
+              subtitle,
+              message
+            ].where((s) => s.isNotEmpty).join('\n')}"
           : [subtitle, message].where((s) => s.isNotEmpty).join('\n'),
       tags: isPromo ? "外部通知·已过滤" : "外部通知·高价值",
     );
 
-    _notificationStreamController.add(entry);
+    _emitManaged(appIdentifier, appName, entry);
+  }
+
+  void _emitManaged(String id, String name, TimelineEntry entry) {
+    void deliver() {
+      if (_disposed) return;
+      appPolicy.observe(id, name, entry.timestamp);
+      if (appPolicy.allows(id))
+        _notificationStreamController.add(TimelineEntry(
+            id: entry.id,
+            timestamp: entry.timestamp,
+            sourceType: entry.sourceType,
+            sourceApp: entry.sourceApp,
+            content: entry.content,
+            tags: entry.tags,
+            appIdentifier: id,
+            endTimestamp: entry.endTimestamp,
+            recordingPartId: entry.recordingPartId));
+    }
+
+    if (appPolicy.loaded) {
+      deliver();
+    } else {
+      unawaited(appPolicy.ready.then((_) => deliver()));
+    }
   }
 
   /// 将包名 / iOS Bundle Identifier 映射为人类易读的应用名称
@@ -190,6 +231,8 @@ class MobileNotificationManager {
   }
 
   void dispose() {
+    _disposed = true;
+    appPolicy.dispose();
     _notificationStreamController.close();
   }
 }

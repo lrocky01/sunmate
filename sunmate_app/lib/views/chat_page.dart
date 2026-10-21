@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/chat_provider.dart';
+import '../providers/button_action_provider.dart';
+import 'voice_input_bubble.dart';
 import '../providers/device_provider.dart';
 import '../core/hardware/hardware_device_driver.dart';
 import '../core/hardware/phone_mic_driver.dart';
@@ -31,11 +33,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   @override
+  void dispose() {
+    _textController.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    ref.watch(buttonActionProvider); // 此页独立打开时也订阅真实硬件事件。
+    final scheme = Theme.of(context).colorScheme;
     final chatState = ref.watch(chatProvider);
     final deviceState = ref.watch(deviceProvider);
     final factory = ref.read(deviceFactoryProvider);
     _scrollToBottom();
+    final pendingVoice = chatState.messages
+        .where((m) =>
+            m.voicePhase != null &&
+            m.voicePhase != VoiceInputPhase.ready &&
+            m.voicePhase != VoiceInputPhase.failed &&
+            m.voicePhase != VoiceInputPhase.cancelled)
+        .toList();
+    final voiceStatus = pendingVoice.isEmpty
+        ? null
+        : switch (pendingVoice.last.voicePhase) {
+            VoiceInputPhase.recording => '正在录音，松开按键后转写',
+            VoiceInputPhase.preparing => '正在整理录音…',
+            VoiceInputPhase.transcribing => '正在将语音转成文字…',
+            _ => '语音等待处理…',
+          };
+    final pressing = _isPressingSoftButton || chatState.isListening;
 
     return Scaffold(
       appBar: AppBar(
@@ -54,39 +81,45 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           AnimatedContainer(
             duration: const Duration(milliseconds: 250),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: chatState.isListening
-                ? Colors.red.shade600
-                : const Color(0xFFFFF3E0),
+            color:
+                chatState.isListening ? scheme.error : scheme.primaryContainer,
             child: Row(
               children: [
                 Icon(
                   chatState.isListening ? Icons.mic : Icons.sensors,
-                  color: chatState.isListening ? Colors.white : Colors.orange.shade900,
+                  color: chatState.isListening
+                      ? scheme.onError
+                      : scheme.onPrimaryContainer,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    chatState.isListening
-                        ? "正在收音中... 松开设备按键或屏幕按钮即可发送"
-                        : chatState.isGenerating
+                    voiceStatus ??
+                        (chatState.isGenerating
                             ? chatState.generationStatus
-                            : "支持长按对讲：按住录音卡或屏幕底部按钮直接交流",
+                            : "支持长按对讲：按住录音卡或屏幕底部按钮直接交流"),
                     style: TextStyle(
-                      color: chatState.isListening ? Colors.white : Colors.orange.shade900,
+                      color: chatState.isListening
+                          ? scheme.onError
+                          : scheme.onPrimaryContainer,
                       fontSize: 12,
-                      fontWeight: chatState.isListening ? FontWeight.bold : FontWeight.normal,
+                      fontWeight: chatState.isListening
+                          ? FontWeight.bold
+                          : FontWeight.normal,
                     ),
                   ),
                 ),
                 if (!deviceState.isConnected)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
                       color: Colors.orange.shade200,
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: const Text("手机麦克风模式", style: TextStyle(fontSize: 10, color: Colors.brown)),
+                    child: const Text("手机麦克风模式",
+                        style: TextStyle(fontSize: 10, color: Colors.brown)),
                   ),
               ],
             ),
@@ -97,10 +130,32 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             child: ListView.builder(
               controller: _scrollController,
               padding: const EdgeInsets.all(16),
-              itemCount: chatState.messages.length,
+              itemCount:
+                  chatState.messages.length + (chatState.isGenerating ? 1 : 0),
               itemBuilder: (context, index) {
+                if (index == chatState.messages.length) {
+                  return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Row(children: [
+                        SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: MediaQuery.disableAnimationsOf(context)
+                                ? Icon(Icons.hourglass_top,
+                                    size: 18, color: scheme.primary)
+                                : const CircularProgressIndicator(
+                                    strokeWidth: 2)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                            child: Semantics(
+                                liveRegion: true,
+                                child: Text(chatState.generationStatus,
+                                    style: TextStyle(
+                                        color: scheme.onSurfaceVariant)))),
+                      ]));
+                }
                 final msg = chatState.messages[index];
-                return _MessageBubble(message: msg);
+                return _MessageBubble(key: ValueKey(msg.id), message: msg);
               },
             ),
           ),
@@ -109,8 +164,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(top: BorderSide(color: Colors.grey.shade200)),
+              color: scheme.surface,
+              border: Border(top: BorderSide(color: scheme.outlineVariant)),
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -123,18 +178,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         decoration: const InputDecoration(
                           hintText: "文字提问或长按下方按钮对讲...",
                           border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          contentPadding:
+                              EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         ),
                         onSubmitted: (val) {
                           if (val.trim().isNotEmpty) {
-                            ref.read(chatProvider.notifier).sendUserMessage(val.trim());
+                            ref
+                                .read(chatProvider.notifier)
+                                .sendUserMessage(val.trim());
                             _textController.clear();
                           }
                         },
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.send, color: Color(0xFFFF8C00)),
+                      icon: Icon(Icons.send, color: scheme.primary),
                       onPressed: () {
                         final val = _textController.text.trim();
                         if (val.isNotEmpty) {
@@ -150,38 +208,48 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 // 大按钮 Push-to-Talk 软按键
                 GestureDetector(
                   onLongPressStart: (_) {
+                    if (chatState.isListening) return;
                     setState(() => _isPressingSoftButton = true);
                     final activeDriver = factory.activeDriver;
                     if (activeDriver is PhoneMicDriver) {
                       activeDriver.triggerPressDown();
                     } else if (activeDriver is AiNote6095Driver) {
-                      activeDriver.simulateButtonEvent(ButtonActionType.pressDown);
+                      activeDriver
+                          .simulateButtonEvent(ButtonActionType.pressDown);
                     } else {
                       ref.read(chatProvider.notifier).setListeningState(true);
                     }
                   },
                   onLongPressEnd: (_) {
+                    if (!_isPressingSoftButton) return;
                     setState(() => _isPressingSoftButton = false);
                     final activeDriver = factory.activeDriver;
                     if (activeDriver is PhoneMicDriver) {
                       activeDriver.triggerRelease();
                     } else if (activeDriver is AiNote6095Driver) {
-                      activeDriver.simulateButtonEvent(ButtonActionType.release);
+                      activeDriver
+                          .simulateButtonEvent(ButtonActionType.release);
                     } else {
-                      ref.read(chatProvider.notifier).setListeningState(false);
+                      ref.read(chatProvider.notifier).cancelVoiceInput();
                     }
+                  },
+                  onLongPressCancel: () {
+                    if (!_isPressingSoftButton) return;
+                    setState(() => _isPressingSoftButton = false);
+                    ref
+                        .read(buttonActionProvider.notifier)
+                        .cancelVoiceCapture();
+                    ref.read(chatProvider.notifier).cancelVoiceInput();
                   },
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     decoration: BoxDecoration(
-                      color: _isPressingSoftButton
-                          ? Colors.red.shade600
-                          : const Color(0xFFFF8C00).withOpacity(0.12),
+                      color: pressing ? scheme.error : scheme.primaryContainer,
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: _isPressingSoftButton ? Colors.red : const Color(0xFFFF8C00),
+                        color: pressing ? scheme.error : scheme.primary,
                         width: 1.5,
                       ),
                     ),
@@ -189,18 +257,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          _isPressingSoftButton ? Icons.mic : Icons.mic_none,
-                          color: _isPressingSoftButton ? Colors.white : const Color(0xFFD35400),
+                          pressing ? Icons.mic : Icons.mic_none,
+                          color: pressing
+                              ? scheme.onError
+                              : scheme.onPrimaryContainer,
                         ),
                         const SizedBox(width: 8),
-                        Text(
-                          _isPressingSoftButton ? "正在聆听中... (松开发送)" : "按住 对讲说话 (Push-to-Talk)",
+                        Flexible(
+                            child: Text(
+                          pressing ? "正在录音，松开发送" : "按住说话",
                           style: TextStyle(
-                            color: _isPressingSoftButton ? Colors.white : const Color(0xFFD35400),
+                            color: pressing
+                                ? scheme.onError
+                                : scheme.onPrimaryContainer,
                             fontWeight: FontWeight.bold,
                             fontSize: 14,
                           ),
-                        ),
+                        )),
                       ],
                     ),
                   ),
@@ -217,10 +290,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
 
-  const _MessageBubble({required this.message});
+  const _MessageBubble({super.key, required this.message});
 
   @override
   Widget build(BuildContext context) {
+    if (message.voicePhase != null)
+      return VoiceInputBubble(key: ValueKey(message.id), message: message);
     // 1. 如果是系统新会话分割线，居中优雅展示
     if (message.isDivider) {
       return Padding(
@@ -239,7 +314,8 @@ class _MessageBubble extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.wb_twilight, size: 14, color: Color(0xFFE65100)),
+                  const Icon(Icons.wb_twilight,
+                      size: 14, color: Color(0xFFE65100)),
                   const SizedBox(width: 4),
                   Text(
                     message.text.replaceAll("———", "").trim(),
@@ -259,15 +335,17 @@ class _MessageBubble extends StatelessWidget {
     }
 
     // 2. 正常对话气泡
+    final scheme = Theme.of(context).colorScheme;
     final isUser = message.isUser;
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 6),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        constraints:
+            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
-          color: isUser ? const Color(0xFFFF8C00) : Colors.grey.shade100,
+          color: isUser ? scheme.primary : scheme.surfaceContainerLow,
           borderRadius: BorderRadius.only(
             topLeft: const Radius.circular(16),
             topRight: const Radius.circular(16),
@@ -278,7 +356,7 @@ class _MessageBubble extends StatelessWidget {
         child: Text(
           message.text,
           style: TextStyle(
-            color: isUser ? Colors.white : Colors.black87,
+            color: isUser ? scheme.onPrimary : scheme.onSurface,
             fontSize: 15,
             height: 1.4,
           ),

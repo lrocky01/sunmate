@@ -1,3 +1,4 @@
+import 'notification_apps_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,18 +29,53 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String _hermesStatusText = "未测试";
   Color _hermesStatusColor = Colors.grey;
   bool _isTesting = false;
+  bool _configDirty = false;
+  bool _fieldsReady = false;
+  String _saveStatus = '';
 
-  void _syncConfigToProvider() {
-    ref.read(serverConfigProvider.notifier).updateConfig(
+  @override
+  void initState() {
+    super.initState();
+    _restoreFields();
+  }
+
+  Future<void> _restoreFields({bool retry = false}) async {
+    final notifier = ref.read(serverConfigProvider.notifier);
+    if (retry) { await notifier.reload(); } else { await notifier.ready; }
+    if (!mounted) return;
+    final config = ref.read(serverConfigProvider);
+    setState(() {
+      _fieldsReady = true;
+      if (_configDirty) return;
+      _asrUrlController.text = config.asrBaseUrl;
+      _asrTokenController.text = config.asrToken;
+      _hermesUrlController.text = config.hermesBaseUrl;
+      _hermesTokenController.text = config.hermesToken;
+    });
+  }
+
+  @override
+  void dispose() {
+    for (final field in [_asrUrlController, _asrTokenController,
+      _hermesUrlController, _hermesTokenController]) { field.dispose(); }
+    super.dispose();
+  }
+
+  Future<bool> _syncConfigToProvider() async {
+    if (!_fieldsReady) return false;
+    final ok = await ref.read(serverConfigProvider.notifier).updateConfig(
           asrBaseUrl: _asrUrlController.text.trim(),
           asrToken: _asrTokenController.text.trim(),
           hermesBaseUrl: _hermesUrlController.text.trim(),
           hermesToken: _hermesTokenController.text.trim(),
         );
+    if (mounted) setState(() => _saveStatus = ok ? '已安全保存，重开 App 后自动恢复。' : '未保存，请查看配置提示并重试。');
+    return ok;
   }
 
-  Future<void> _testAsrConnection() async {
-    _syncConfigToProvider();
+  Future<void> _testAsrConnection({bool save = true}) async {
+    if (save && !await _syncConfigToProvider()) return;
+    if (!mounted) return;
     setState(() {
       _asrStatusText = "正在探活...";
       _asrStatusColor = Colors.orange;
@@ -47,6 +83,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     final asr = ref.read(asrServiceProvider);
     final ok = await asr.checkHealth();
+    if (!mounted) return;
 
     setState(() {
       if (ok) {
@@ -59,8 +96,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     });
   }
 
-  Future<void> _testHermesConnection() async {
-    _syncConfigToProvider();
+  Future<void> _testHermesConnection({bool save = true}) async {
+    if (save && !await _syncConfigToProvider()) return;
+    if (!mounted) return;
     setState(() {
       _hermesStatusText = "正在握手...";
       _hermesStatusColor = Colors.orange;
@@ -68,6 +106,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
     final client = ref.read(agentClientProvider);
     final ok = await client.checkHealth();
+    if (!mounted) return;
 
     setState(() {
       if (ok) {
@@ -82,15 +121,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _testAllConnections() async {
     setState(() => _isTesting = true);
-    await Future.wait([
-      _testAsrConnection(),
-      _testHermesConnection(),
-    ]);
-    setState(() => _isTesting = false);
+    try {
+      if (!await _syncConfigToProvider()) return;
+      await Future.wait([_testAsrConnection(save: false), _testHermesConnection(save: false)]);
+    } finally { if (mounted) setState(() => _isTesting = false); }
   }
 
   @override
   Widget build(BuildContext context) {
+    final servers = ref.watch(serverConfigProvider);
     final buttonConfig = ref.watch(buttonActionProvider);
     final buttonNotifier = ref.read(buttonActionProvider.notifier);
     final device = ref.watch(deviceProvider);
@@ -115,6 +154,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (!servers.loaded) const LinearProgressIndicator(),
+                  if (servers.storageMessage != null) ...[
+                    Text(servers.storageMessage!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    TextButton(onPressed: () async {
+                      _configDirty = false;
+                      await _restoreFields(retry: true);
+                    }, child: const Text('重试恢复配置')),
+                  ],
+                  Text('节点和访问凭据保存在本机安全存储，覆盖安装请沿用同一签名。',
+                    style: Theme.of(context).textTheme.bodySmall),
+                  const SizedBox(height: 12),
                   // ASR 配置
                   Row(
                     children: [
@@ -127,6 +177,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   const SizedBox(height: 6),
                   TextField(
                     controller: _asrUrlController,
+                    onChanged: (_) => _configDirty = true,
                     decoration: const InputDecoration(
                       labelText: "ASR 基础地址 (例: http://your-ip:8000)",
                       border: OutlineInputBorder(),
@@ -136,6 +187,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: _asrTokenController,
+                    onChanged: (_) => _configDirty = true,
                     obscureText: true,
                     decoration: const InputDecoration(
                       labelText: "ASR 访问密钥 / Token (可选，外网防刷)",
@@ -154,7 +206,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       TextButton.icon(
                         icon: const Icon(Icons.wifi_tethering, size: 16),
                         label: const Text("探测 ASR", style: TextStyle(fontSize: 12)),
-                        onPressed: _testAsrConnection,
+                        onPressed: _fieldsReady ? _testAsrConnection : null,
                       ),
                     ],
                   ),
@@ -172,6 +224,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   const SizedBox(height: 6),
                   TextField(
                     controller: _hermesUrlController,
+                    onChanged: (_) => _configDirty = true,
                     decoration: const InputDecoration(
                       labelText: "Hermes 地址 (例: http://your-ip:8080/v1)",
                       border: OutlineInputBorder(),
@@ -181,6 +234,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   const SizedBox(height: 8),
                   TextField(
                     controller: _hermesTokenController,
+                    onChanged: (_) => _configDirty = true,
                     obscureText: true,
                     decoration: const InputDecoration(
                       labelText: "Hermes 访问密钥 / Token (可选，防盗用)",
@@ -199,7 +253,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       TextButton.icon(
                         icon: const Icon(Icons.smart_toy, size: 16),
                         label: const Text("探测 Hermes", style: TextStyle(fontSize: 12)),
-                        onPressed: _testHermesConnection,
+                        onPressed: _fieldsReady ? _testHermesConnection : null,
                       ),
                     ],
                   ),
@@ -249,6 +303,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     ),
                   ),
                   const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: !_fieldsReady || !servers.loaded || _isTesting ? null : () async {
+                      await _syncConfigToProvider();
+                    },
+                    icon: const Icon(Icons.save_outlined), label: const Text('保存节点配置')),
+                  if (_saveStatus.isNotEmpty) Text(_saveStatus),
+                  const SizedBox(height: 8),
                   // 一键双端诊断按钮
                   SizedBox(
                     width: double.infinity,
@@ -260,7 +321,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10)),
                       ),
-                      onPressed: _isTesting ? null : _testAllConnections,
+                      onPressed: _isTesting || !_fieldsReady || !servers.loaded ? null : _testAllConnections,
                       icon: _isTesting
                           ? const SizedBox(
                               width: 16,
@@ -467,6 +528,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const SizedBox(height: 24),
 
+          ListTile(leading: const Icon(Icons.apps_outlined),
+            title: const Text('可采集的应用'),
+            subtitle: const Text('查看实际回传过通知的应用，管理本地采集'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => const NotificationAppsPage()))),
           // 4. iOS ANCS 系统通知透传
           const Text("🍎 iOS 系统通知同步 (ANCS 硬件级)",
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
@@ -510,7 +577,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     "1. 打开 iPhone【设置】->【蓝牙】；\n"
                     "2. 找到已配对的 C·ONE，点击右侧 ⓘ；\n"
                     "3. 若有【共享系统通知】开关，可在此管理授权；\n"
-                    "4. 系统授权与设备业务鉴权分开验证；本版不保证通知正文已可透传。",
+                    "4. 系统授权与设备业务鉴权分开验证；通知正文需由已连接并完成鉴权的录音卡回传，可在“可采集的应用”管理本地采集。",
                     style: TextStyle(fontSize: 12, color: Colors.blueGrey, height: 1.5),
                   ),
                 ],

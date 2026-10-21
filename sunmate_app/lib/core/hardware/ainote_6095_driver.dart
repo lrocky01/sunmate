@@ -23,6 +23,7 @@ import 'recorder_hardware_settings.dart';
 import 'recorder_long_recordings.dart';
 import 'recorder_long_file_models.dart';
 import 'recorder_long_file_store.dart';
+import '../recordings/recording_processing_models.dart';
 import 'recorder_long_file_sync.dart';
 
 /// 保留 HAL 驱动入口，在完整 GATT 匹配后选择官方协议。
@@ -59,6 +60,9 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   bool _fileChannelReady = false;
   late final RecorderLongFileSync _longFiles = RecorderLongFileSync(
       store: _longFileStore, audio: _localAudio,
+      onSegmentSignal: (signal) {
+        if (!_disposed) _segmentSignals.add(signal);
+      },
       requestStatus: () => _sendJson(BleJsonRpc.getStatus(), '长录只读状态查询'),
       send: (bytes) async {
         if (!_canReceiveNotification || !_fileChannelReady ||
@@ -124,6 +128,8 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   int _audioReceivedBytes = 0;
   int _audioOutsideSession = 0;
   int _lastAudioFrameCount = 0;
+  final _segmentSignals = StreamController<RecordingSegmentSignal>.broadcast();
+  Stream<RecordingSegmentSignal> get segmentSignals => _segmentSignals.stream;
   final _buttonEvents = StreamController<DeviceButtonEvent>.broadcast();
   final _audioPackets = StreamController<AudioDataPacket>.broadcast();
   final _stateChanges = StreamController<void>.broadcast();
@@ -266,7 +272,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   String get audioStatistics =>
       '通知=$_audioNotificationCount；接收字节=$_audioReceivedBytes；会话外忽略=$_audioOutsideSession；最近完整录音帧=$_lastAudioFrameCount';
   String get diagnosticText => [
-        'SunMate 1.0.31+32',
+        'SunMate 1.0.32+33',
         '通知回传: 已接收=$_notificationsDelivered；已忽略=$_notificationsIgnored；无效=$_notificationsInvalid',
         '长录文件通道: $_fileChannelReady；同步中=${longFileLibrary.busy}；待重连=${longFileLibrary.needsReconnect}；本机可播放=${longFileLibrary.recordings.where((r) => r.canPlay).length}',
         '长录目录: ${_longFiles.catalogDiagnostics}',
@@ -1274,6 +1280,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
               title: frame.title,
               subtitle: frame.subtitle,
               message: frame.message,
+              notificationIdentity: '${_serialNumber == '--' ? _device?.remoteId.str ?? 'unknown' : _serialNumber}:${frame.uid}',
               timestamp: frame.timestamp ?? receivedAt);
           _notificationDigests.remove(frame.uid);
           _notificationDigests[frame.uid] = digest;
@@ -1581,7 +1588,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
         _log('收到二进制长录音开始；已关闭分段独立同步，不混入实时会话');
         final preparation = _longRecordings.started(_serialNumber, event.sessionId!)
             .then<void>((_) {});
-        _longFiles.recordingStarted(event.sessionId!, preparation: preparation);
+        _longFiles.recordingStarted(event.sessionId!, preparation: preparation, newRecording:true);
       } else {
         _longFiles.recordingStateUnknown();
         _handleVoiceCommand({'event': 'start', 'session_id': event.sessionId});
@@ -1890,6 +1897,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
     _disposed = true;
     await _receiverSub.cancel();
     _audioReceiver.dispose();
+    await _segmentSignals.close();
     await _buttonEvents.close();
     await _audioPackets.close();
     await _stateChanges.close();

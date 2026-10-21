@@ -1,4 +1,8 @@
 import 'dart:convert';
+import 'package:sunmate_app/core/recordings/recording_processing_models.dart';
+import 'package:sunmate_app/core/recordings/recording_processing_controller.dart';
+import 'recording_processing_test.dart'
+    show MemoryContent, SegmentAudio, SegmentAsr, SegmentAgent;
 import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_blue_plus_platform_interface/flutter_blue_plus_platform_interface.dart';
@@ -163,7 +167,26 @@ void main() {
   for (final mode in LongRecordingPurpose.values) {
     test('AES + ${mode.name}: live closed download then stop archives tail',
         () async {
+      final asr = SegmentAsr(), agent = SegmentAgent();
+      final processing = RecordingProcessingController(
+          content: MemoryContent(),
+          audioStore: store,
+          audio: SegmentAudio(store),
+          asr: () => asr,
+          agent: () => agent);
+      await processing.ready;
+      final signals = <RecordingSegmentSignal>[];
+      final tasks = <Future<void>>[];
+      final subscription = driver.segmentSignals.listen((signal) {
+        signals.add(signal);
+        tasks.add(processing.accept(signal));
+      });
+      addTearDown(() async {
+        await subscription.cancel();
+        processing.dispose();
+      });
       await connect();
+      expect(signals, isEmpty); // 单凭GATT/AES不伪造录音段。
       expect(await driver.chooseLongRecordingPurpose(mode), true);
       platform.listedParts = 2;
       platform.notify(device.remoteId, BleConstants.charDeviceEvent,
@@ -185,6 +208,16 @@ void main() {
           !driver.longFileLibrary.busy &&
           driver.longFileLibrary.recordings.single.canPlay);
       expect(downloadedParts(), [0, 1]);
+      await until(
+          () => signals.any((s) => s.kind == SegmentSignalKind.finalized));
+      await Future.wait(tasks);
+      await processing.resume();
+      expect(signals.first.kind, SegmentSignalKind.started);
+      expect(processing.partsOf(processing.sessions.single.id), hasLength(2));
+      expect(processing.sessionComplete(processing.sessions.single), true);
+      expect(processing.sessions.single.purpose, mode);
+      expect(asr.submits, 0);
+      expect(agent.meetings, 0);
       expect(driver.longFileLibrary.recordings.single.purpose, mode);
       expect(audio.prepares, 1);
       expect(driver.lastRecordedBytes, isNull);

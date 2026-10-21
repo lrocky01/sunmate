@@ -10,6 +10,14 @@ import 'package:uuid/uuid.dart';
 import 'recorder_long_file_models.dart';
 import 'recorder_long_recordings.dart';
 
+class PreparedSegmentOgg {
+  final String relativePath, asrRelativePath;
+  final int samples48, leadSamples48;
+  final String sha256, asrSha256;
+  const PreparedSegmentOgg(this.relativePath, this.asrRelativePath,
+      this.samples48, this.leadSamples48, this.sha256, this.asrSha256);
+}
+
 /// 长录本地归档。所有输入都须已通过真实设备身份验证；这里不访问 BLE、账号或网络。
 /// 接收临时段、OPS 源段和可播放音频分开保存，失败不会删除任何已提交段。
 class RecorderLongFileStore {
@@ -300,6 +308,141 @@ class RecorderLongFileStore {
     return RecorderOggAudio(relative, packets, samples * 1000 ~/ 48000);
   }
 
+  Future<void> validateSegment(
+      String sn, int session, RecorderCommittedSegment segment) async {
+    _identity(sn, session, segment.part);
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(segment.sha256) ||
+        segment.relativePath !=
+            _relative(sn, session, 'p${segment.part}-${segment.sha256}.ops')) {
+      throw const FormatException('分段来源不匹配');
+    }
+    final file = await resolveRelative(segment.relativePath);
+    await _validate(file, segment.size);
+    if (await _hash(file) != segment.sha256)
+      throw const FormatException('分段指纹不匹配');
+  }
+
+  Future<void> validateDerived(String relative, String? expectedHash) async {
+    if (expectedHash == null ||
+        await _hash(await resolveRelative(relative)) != expectedHash)
+      throw const FormatException('派生音频指纹不匹配');
+  }
+
+  /// 分段入口与整场assemble分开；原有p0连续性校验不放宽。
+  /// 前段末尾作为有界解码上下文，播放输出跳过上下文，ASR可利用并按偏移裁除。
+  Future<PreparedSegmentOgg> prepareSegment(
+      String sn, int session, RecorderCommittedSegment segment,
+      {RecorderCommittedSegment? previous}) async {
+    await validateSegment(sn, session, segment);
+    final context = <Uint8List>[];
+    var lead = 0;
+    if (segment.part > 0) {
+      if (previous == null || previous.part != segment.part - 1)
+        throw const FormatException('等待前段边界上下文');
+      await validateSegment(sn, session, previous);
+      await for (final packet
+          in _packets(await resolveRelative(previous.relativePath))) {
+        context.add(packet);
+        lead += _opusSamples(packet);
+        while (
+            context.length > 1 && lead - _opusSamples(context.first) >= 48000) {
+          lead -= _opusSamples(context.removeAt(0));
+        }
+      }
+      if (lead <= 0 || lead > 65535) throw const FormatException('分段解码上下文无效');
+    }
+    final fingerprint = (await Sha256().hash(utf8.encode(
+            '${segment.sha256}:${previous?.sha256 ?? "first"}:segment-v1')))
+        .bytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+    final playable =
+        _relative(sn, session, 'segment-${segment.part}-$fingerprint.ogg');
+    final asr =
+        _relative(sn, session, 'segment-asr-${segment.part}-$fingerprint.ogg');
+    Future<int> write(String relative, int skip) async {
+      final destination = await resolveRelative(relative);
+      final temporary = await resolveRelative(
+          _relative(sn, session, 'segment-${const Uuid().v4()}.ogg.partial'));
+      await temporary.create(exclusive: true);
+      final output = await temporary.open(mode: FileMode.writeOnly);
+      final muxer =
+          _LongOggMuxer((session ^ segment.part) & 0xffffffff, preSkip: skip);
+      var samples = 0;
+      var contentSamples = 0;
+      try {
+        for (final bytes in muxer.start()) await output.writeFrom(bytes);
+        for (final packet in context) {
+          samples += _opusSamples(packet);
+          await output.writeFrom(muxer.packet(packet, samples));
+        }
+        await for (final packet
+            in _packets(await resolveRelative(segment.relativePath))) {
+          final count = _opusSamples(packet);
+          contentSamples += count;
+          samples += count;
+          await output.writeFrom(muxer.packet(packet, samples));
+        }
+        if (contentSamples == 0) throw const FormatException('分段音频为空');
+        await output.writeFrom(muxer.finish(samples));
+        await output.flush();
+      } finally {
+        await output.close();
+      }
+      await validateSegment(sn, session, segment);
+      if (previous != null) await validateSegment(sn, session, previous);
+      if (await destination.exists()) {
+        if (await _hash(destination) != await _hash(temporary))
+          throw const FormatException('分段输出与既有文件不匹配，原文件保留');
+        await temporary.delete(); // 只清理本次生成的相同临时副本。
+      } else {
+        await temporary.rename(destination.path);
+      }
+      return contentSamples;
+    }
+
+    final samples = await write(playable, lead);
+    final playableHash = await _hash(await resolveRelative(playable));
+    if (lead == 0)
+      return PreparedSegmentOgg(
+          playable, playable, samples, 0, playableHash, playableHash);
+    if (await write(asr, 0) != samples)
+      throw const FormatException('分段两次封装时长不一致');
+    return PreparedSegmentOgg(playable, asr, samples, lead, playableHash,
+        await _hash(await resolveRelative(asr)));
+  }
+
+  /// 升级前的已提交OPS可离线发现；同段存在多个版本时保留并等真实同步选定。
+  Future<List<RecorderCommittedSegment>> discoverSegments(
+      String sn, int session) async {
+    _identity(sn, session);
+    final directory =
+        (await resolveRelative(_relative(sn, session, 'record.json'))).parent;
+    if (!await directory.exists()) return [];
+    final found = <int, List<RecorderCommittedSegment>>{};
+    await for (final entry in directory.list(followLinks: false)) {
+      final match = RegExp(r'^p([0-9]+)-([a-f0-9]{64})\.ops$')
+          .firstMatch(entry.uri.pathSegments.last);
+      if (match == null) continue;
+      final part = int.parse(match[1]!);
+      final file = File(entry.path);
+      if (await FileSystemEntity.type(file.path, followLinks: false) !=
+          FileSystemEntityType.file) throw const FormatException('原始段类型无效');
+      final source = RecorderCommittedSegment(
+          part: part,
+          size: await file.length(),
+          sha256: match[2]!,
+          relativePath: _relative(sn, session, entry.uri.pathSegments.last));
+      await validateSegment(sn, session, source);
+      (found[part] ??= []).add(source);
+      if (found.length > maxParts) throw const FormatException('录音段数超限');
+    }
+    return [
+      for (final versions in found.values)
+        if (versions.length == 1) versions.single
+    ]..sort((a, b) => a.part.compareTo(b.part));
+  }
+
   /// 仅计算 Opus packet TOC 的真实时长；最终可播放结果仍必须经过完整解码验收。
   int _opusSamples(Uint8List packet) {
     if (packet.isEmpty || packet.length > 65024) {
@@ -492,8 +635,9 @@ class RecorderLongFileStore {
 /// 长录专用封装；不改变实时通道的容器状态机。
 class _LongOggMuxer {
   final int serial;
+  final int preSkip;
   var sequence = 0;
-  _LongOggMuxer(this.serial);
+  _LongOggMuxer(this.serial, {this.preSkip = 0});
 
   List<Uint8List> start() {
     final head = ByteData(19);
@@ -501,7 +645,7 @@ class _LongOggMuxer {
     head.setUint8(8, 1);
     head.setUint8(9, 1);
     // 原始 OPS 没有可信 encoder-delay 元数据，保留所有原始样本。
-    head.setUint16(10, 0, Endian.little);
+    head.setUint16(10, preSkip, Endian.little);
     head.setUint32(12, 16000, Endian.little);
     final vendor = utf8.encode('SunMate Long Recorder');
     final tags = BytesBuilder()

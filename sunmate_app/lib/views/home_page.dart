@@ -31,7 +31,7 @@ class HomePage extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text("SunMate 阳光智伴", style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-            Text("v1.0.31+32 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
+            Text("v1.0.32+33 · 蓝牙配对与诊断", style: TextStyle(fontSize: 11, color: Colors.black54)),
           ],
         ),
         actions: [
@@ -304,7 +304,7 @@ class HomePage extends ConsumerWidget {
             _FeatureTile(
               icon: Icons.timeline,
               title: "随身时光机与成长画像",
-              subtitle: "低功耗 VOR 声控记录 + 手机通知对齐，每日复盘认知决策",
+              subtitle: "随身长录、通知与灵感按时间整理，手动生成复盘",
               color: Colors.teal,
               onTap: () => ref.read(currentTabProvider.notifier).state = 3,
             ),
@@ -409,7 +409,7 @@ class BleDiagnosticsSheet extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Row(children: [
-                const Expanded(child: Text('录音卡设置 · 1.0.31+32', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
+                const Expanded(child: Text('录音卡设置 · 1.0.32+33', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
                 IconButton(
                   tooltip: '复制诊断日志', icon: const Icon(Icons.copy),
                   onPressed: () async {
