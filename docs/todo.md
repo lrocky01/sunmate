@@ -753,8 +753,8 @@
 - [交付边界与资料] 协议、配置示例、权限及iOS限制见`sunmate-hermes/BACKGROUND.md`；源码完整性清单25项已刷新，未生成新安装包。App版本仍1.0.33+34，旧IPA SHA256仍4f8886008909075627e989318cbd1b19eb9da13b962575c68f0ec2cd8f25d4d5，Hermes2.2.0 ZIP仍21ccaa270c3853670b18e6d79268e71705457fec0719ca1905a6a7b5bed65e7e。鉴权/凭据库、AgentClient、AsrService、原节点安全存储及依赖锁文件无差异。当前Mac只有macOS SDK/CLT，没有iPhoneOS SDK，未完成完整Runner iOS编译；UIKit后台唤醒/锁屏、系统终止与强退、真实服务器/模型/手机仍需后续单独授权打包及实机验收。未提交、推送、部署、解绑、重新协商或删除卡片及手机原录音。
 
 
-## 2026-10-21 App 1.0.34+35 / Hermes 2.3.0 发布
-- [进行中] 用户授权递增版本、同步首页/诊断、完整本地检查、推送 main、构建并下载 IPA，生成对应 Hermes 安装包及安装配置步骤；不部署。
+## 2026-10-21—22 App 1.0.34+35 / Hermes 2.3.0 发布
+- [已完成] 版本、首页/诊断同步、本地检查、推main、云端iOS构建、IPA下载校验及Hermes安装包/配置步骤均已完成；未部署或操作真实卡片。
 - [范围] 发布上一轮已完成的会议/随身后台收段、原生上传、服务器私有 ASR/自动总结和前台结果取回。新开关默认关闭，保留真实 AES、旧凭据、HAL、私有端点及原录音，不自动解绑/重新协商。
 - [验证] 本机可用 Swift / Flutter / Python 先检查；完整 iOS Runner 由 GitHub Actions 编译。锁屏、强退恢复和真实模型链路留给本版安装后的实机验收，不把合成回归当实际后台成功。
 - [版本与包] App pubspec、首页两处、诊断及诊断回归统一 1.0.34+35；Hermes 安装器/五技能/契约/兼容声明升 2.3.0。真实 AgentClient 合成回环请求重新捕获。旧文字 ingest 仍不接音频，新音频能力单独声明且默认关闭。安装包清单25项及ZIP/TGZ校验通过，旧IPA和2.2.0包摘要未变。
@@ -762,3 +762,7 @@
 - [源码已推送] 175f5747f927031f536e7cced28146d8337cf30a已推main，push自动触发Actions run39629543000；云端App检查/测试和CocoaPods步骤通过，正在完整iOS编译。2.2.0→2.3.0隔离升级回归通过：原插件拒绝覆盖、备份旧代码后可准备新插件，资料库/配置/独立凭据字节摘要保持不变。安装及两种用途验收见docs/RELEASE_1.0.34_BACKGROUND_INSTALL.md。
 - [云端编译修复] 首次run39629543000的iOS编译发现新FileHandle read/write接口需iOS13.4，项目最低iOS13.0；新增与现有离线播放一致的可用性检查，不提高App部署目标，旧系统拒绝不支持的音频读写。修复范围仅两个原生文件，真实鉴权/密钥和安装包不变；完成原生相关回归后重新推main构建。
 - [兼容修复检查] Swift typecheck通过；直接运行原生合成传输回归normal/bad-size均通过（2段正常收取/坏尺寸隔离、CoreAudio解码）；服务端音频相关25项回归通过（含真实原生文件上传）。兼容修复不改Dart或Hermes安装包内容，重新构建同一1.0.34+35。
+- [最终云端与下载] 修复源提交498e3cb3f6b65e472eb9b27f55a84fe69aeb722c已推main，Actions run39631033175成功，完整iOS Release/打包/上传通过。artifact12358784084匹配源提交，外层ZIP摘要568270321007d0fc49ddf4ddf0e338c44f829f3ab0f2b1965a5cbb36a1e2d0e5与GitHub一致。
+- [IPA交付] build_output/SunMate-1.0.34+35.ipa，未签名，10,529,121字节；SHA256=b5e934caded619d866241893e930e71051e9f28d1c231ee1c52522e8d0008ca8。CRC、版本/包ID、首页诊断、后台原生收段/上传/封装、同BLE交接、真实身份挑战、旧密钥保护及本地播放组件核对通过。验证元数据build_output/verification-1.0.34/delivery.json。
+- [Hermes交付] build_output/hermes-release/sunmate-hermes-2.3.0.zip，91,245字节，SHA256=446755188734ffb74e338d560aaca2dc56849650cce549900ab2e4f960fe8533；tar.gz为60,488字节，SHA256=3356532733578c1ea59f9f91dce8ce05b735a2844e54f3b4746382681137580a；配套SHA256SUMS-2.3.0。清单25项核对通过，旧IPA和安装包未变。
+- [安装与实测边界] docs/RELEASE_1.0.34_BACKGROUND_INSTALL.md提供覆盖安装、旧插件保留升级、原profile配置合并、私有ASR/Token文件/ffmpeg及两种用途验收步骤。新开关默认关闭；未部署真实服务器，未用真实录音/通知或真实模型验收。锁屏/强退/重连需安装后实测；新增音频读写与原有本地播放均需iOS13.4+，App最低部署目标未变。服务器已收妥任务可独立继续，App回前台取回结果，无APNs常驻承诺；不解绑、不重新协商、不删除原录音。
