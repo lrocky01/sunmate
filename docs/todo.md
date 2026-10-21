@@ -729,10 +729,13 @@
 
 ## App 1.0.33+34 与 Hermes 2.2.0 发布（2026-10-21）
 
-- [进行中] 用户已授权升级版本、检查后推送main触发IPA构建，并生成新版Hermes完整安装包及安装/验收步骤。不执行服务器部署；保持真实鉴权、旧密钥、HAL及私有端点，不解绑、不删除原录音。
+- [已完成构建与下载交付] 用户已授权升级版本、检查后推送main触发IPA构建，并生成新版Hermes完整安装包及安装/验收步骤。不执行服务器部署；保持真实鉴权、旧密钥、HAL及私有端点，不解绑、不删除原录音。
 - [范围] 发布已完成的自动同步/持久归档/按引用查询及同Hermes原生监听接线；同步pubspec、首页/设备设置与蓝牙诊断版本。Hermes包递增2.2.0、更新技能及兼容声明，旧2.0/2.1安装包保留。补齐异步工具注册标记，归档读取放工作线程；安装文件与插件启用、原生重载、手机验证分别说明。
 - [检查与交付计划] 当前源码重新捕获九类合成App请求，全量Flutter测试/分析、Python含原生aiohttp/包完整性回归；精确纳入本轮发布文件，排除旧审计文档与敏感/构建资料。推送确切源提交至main，核对Actions来源、artifact摘要、IPA CRC/版本/组件；保存IPA及Hermes2.2 ZIP/校验文件，交付中文安装与三类资料同步后查询步骤。
 - [本地检查通过] App全量676项通过；静态分析退出0、无error/warning、9条既有弃用info。诊断测试旧版本号同步更新后全量重跑通过。Hermes含真实aiohttp接线84项通过；五技能quick_validate、shell语法、diff、23项源码清单核验通过。九类请求由真实Dart HTTP重新捕获、按1.0.33+34更新兼容证据；不使用真实通知/录音/凭据或端点。
 - [Hermes包已生成] build_output/hermes-release/sunmate-hermes-2.2.0.zip为73,595字节、SHA256=21ccaa270c3853670b18e6d79268e71705457fec0719ca1905a6a7b5bed65e7e；tar.gz为44,884字节、SHA256=810b22d40f5ae790d818008bd4942a611c4723d28aafc64ebe2d61503bfb269d。ZIP CRC/全清单及两份校验通过，旧2.0/2.1包保留。README包含安装、显式启用/重载、独立Token及三类资料同步后查询步骤；本轮不执行目标服务器部署。
 
 - [源码已推送] 应用与插件源提交2480aec5348871083349746f04d3bd407ff37db9已推main。工作流active但push后未出现对应run；核对后将通过已有workflow_dispatch显式触发同一构建。发布说明残留的旧版能力文字已修正并刷新包清单/校验，不改App或插件实现。
+- [云端交付完成] README/清单修正提交de95df3b5dc3ba2ba742754b02de629820b25f85已推main；显式workflow_dispatch成功触发Actions #50（run39613822731），检查、675项测试（1项依赖本机ffmpeg按环境跳过，本地676项全部通过）、iOS Release及上传成功。artifact12351838284来源提交匹配，ZIP SHA256=c0d6664df5835cf1a831dbfd04fcf1082d3e46b7bce9e730a8f7dab34b71e8f5与GitHub摘要一致。
+- [IPA已下载并验证] build_output/SunMate-1.0.33+34.ipa为10,339,799字节，SHA256=4f8886008909075627e989318cbd1b19eb9da13b962575c68f0ec2cd8f25d4d5。两层ZIP CRC、Info.plist=1.0.33/34、原bundleID/后台模式、首页/诊断及归档/引用/查询标记、BLE/安全存储组件核验通过；同目录提供.sha256。验收报告/private/tmp/sunmate-1.0.33-delivery-check.json。现有旧IPA/2.0/2.1安装包均保留。
+- [安装与实机边界] 配套Hermes2.2.0 ZIP/TGZ及SHA256SUMS-2.2.0均在build_output/hermes-release，23项源码清单/CRC/最终摘要再次通过。按README在目标同profile安装技能、准备资料库、显式启用插件/重载；手机沿用签名覆盖安装，配置独立同步凭据，开启所需类别，历史按范围补传，等逐条回执确认后分别问通知/转写/总结。未代用户部署服务器、启用真实自动同步或接触真实通知/录音/凭据，真实模型工具问答仍待用户安装验收；未解绑、重协商或删除原录音。
