@@ -759,3 +759,6 @@
 - [验证] 本机可用 Swift / Flutter / Python 先检查；完整 iOS Runner 由 GitHub Actions 编译。锁屏、强退恢复和真实模型链路留给本版安装后的实机验收，不把合成回归当实际后台成功。
 - [版本与包] App pubspec、首页两处、诊断及诊断回归统一 1.0.34+35；Hermes 安装器/五技能/契约/兼容声明升 2.3.0。真实 AgentClient 合成回环请求重新捕获。旧文字 ingest 仍不接音频，新音频能力单独声明且默认关闭。安装包清单25项及ZIP/TGZ校验通过，旧IPA和2.2.0包摘要未变。
 - [发布前检查通过] Flutter全量684项通过；分析退出0、无error/warning（9条既有弃用info）。Python全量109项通过；Swift可用原生部分typecheck、pbxproj/plist、Shell语法、diff及安装包逐文件SHA通过。日志/private/tmp/sunmate-1.0.34-{dart-final,analyze}.log和sunmate-2.3.0-python-final.log。下一步推main并等待完整iOS编译，不宣称锁屏实机已通过。
+- [源码已推送] 175f5747f927031f536e7cced28146d8337cf30a已推main，push自动触发Actions run39629543000；云端App检查/测试和CocoaPods步骤通过，正在完整iOS编译。2.2.0→2.3.0隔离升级回归通过：原插件拒绝覆盖、备份旧代码后可准备新插件，资料库/配置/独立凭据字节摘要保持不变。安装及两种用途验收见docs/RELEASE_1.0.34_BACKGROUND_INSTALL.md。
+- [云端编译修复] 首次run39629543000的iOS编译发现新FileHandle read/write接口需iOS13.4，项目最低iOS13.0；新增与现有离线播放一致的可用性检查，不提高App部署目标，旧系统拒绝不支持的音频读写。修复范围仅两个原生文件，真实鉴权/密钥和安装包不变；完成原生相关回归后重新推main构建。
+- [兼容修复检查] Swift typecheck通过；直接运行原生合成传输回归normal/bad-size均通过（2段正常收取/坏尺寸隔离、CoreAudio解码）；服务端音频相关25项回归通过（含真实原生文件上传）。兼容修复不改Dart或Hermes安装包内容，重新构建同一1.0.34+35。

@@ -9,10 +9,19 @@ enum RecorderBackgroundError: Error { case invalid, capacity, busy, unauthorized
 /// File-only utilities shared by the native receiver and local regression harness.
 /// Reads one bounded packet at a time; a full day of audio never enters memory.
 enum RecorderBackgroundFiles {
+  // Match the existing offline audio path without raising the app deployment target.
+  static func read(_ file: FileHandle, count: Int) throws -> Data? {
+    guard #available(iOS 13.4, macOS 10.15.4, *) else { throw RecorderBackgroundError.invalid }
+    return try file.read(upToCount: count)
+  }
+  static func write(_ file: FileHandle, data: Data) throws {
+    guard #available(iOS 13.4, macOS 10.15.4, *) else { throw RecorderBackgroundError.invalid }
+    try file.write(contentsOf: data)
+  }
   static func sha(_ file: URL) throws -> String {
     let input = try FileHandle(forReadingFrom: file); defer { try? input.close() }
     var digest = SHA256()
-    while let data = try input.read(upToCount: 65536), !data.isEmpty { digest.update(data: data) }
+    while let data = try read(input, count: 65536), !data.isEmpty { digest.update(data: data) }
     return digest.finalize().map { String(format: "%02x", $0) }.joined()
   }
   static func safeDirectory(_ root: URL, _ components: [String]) throws -> URL {
@@ -48,10 +57,10 @@ enum RecorderBackgroundFiles {
     let input = try FileHandle(forReadingFrom: file); defer { try? input.close() }
     var total: Int64 = 0
     while total < size.int64Value {
-      guard let header = try input.read(upToCount: 8), header.count == 8 else { throw RecorderBackgroundError.invalid }
+      guard let header = try read(input, count: 8), header.count == 8 else { throw RecorderBackgroundError.invalid }
       let n = header.prefix(4).enumerated().reduce(0) { $0 | Int($1.element) << ($1.offset * 8) }
       guard n > 0, n <= 65536, header.suffix(4).allSatisfy({ $0 == 0 }),
-            let data = try input.read(upToCount: n), data.count == n else { throw RecorderBackgroundError.invalid }
+            let data = try read(input, count: n), data.count == n else { throw RecorderBackgroundError.invalid }
       _ = try samples(data)
       try consume(data)
       total += Int64(8 + n)
@@ -86,7 +95,7 @@ enum RecorderBackgroundFiles {
         for _ in 0..<8 { crc = (crc << 1) ^ (crc & 0x80000000 != 0 ? 0x04c11db7 : 0) }
       }
       for i in 0..<4 { bytes[22+i] = UInt8(truncatingIfNeeded: crc >> (i * 8)) }
-      try handle.write(contentsOf: Data(bytes))
+      try write(handle, data: Data(bytes))
     }
     var head = Data("OpusHead".utf8)
     // ASR container includes decoder context; result timestamps trim lead48 later.

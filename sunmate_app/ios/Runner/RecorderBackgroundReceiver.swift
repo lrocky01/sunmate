@@ -340,7 +340,7 @@ final class RecorderBackgroundReceiver {
   }
   private func data(_ data: Data) {
     guard reading != nil, !data.isEmpty, received + data.count <= expected else { fail(); return }
-    do { try output?.write(contentsOf: data); received += data.count; timeout(); try finishRead() } catch { fail() }
+    do { guard let file = output else { throw RecorderBackgroundError.invalid }; try RecorderBackgroundFiles.write(file, data: data); received += data.count; timeout(); try finishRead() } catch { fail() }
   }
   private func next() throws {
     finishRelease(); if !owner || releasing || poisoned { return }
