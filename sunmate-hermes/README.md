@@ -115,11 +115,11 @@ bash sunmate-hermes/setup_hermes.sh --app-url https://your-domain.example/v1
 
 ## 数据与 Skills
 
-五个 Skills 都自带 `references/data-contract.md`。第一版数据随请求发送，不要求手机和服务器共享文件路径。服务器文件归档仅在已经完成上传并返回可验证引用时使用，不把聊天成功等同归档成功。
+五个 Skills 都自带 `references/data-contract.md`。兼容随请求发送文字的方式；新版也支持归档后按精确引用读取，不要求手机和服务器共享文件路径。只有收到真实同步回执才能称为服务器已归档。
 
 Skills 会报告缺失来源、未识别说话人和不可计算指标；长报告不整体写进长期记忆。安装 Skills 只是能力说明，App 仍需按契约发送数据；App 的流式解析、会话标识及历史版本的成功兜底需单独修复，不能靠安装脚本改变。
 
-三类“生成报告”默认只分析并返回内容，不自动写长期记忆。若将来需要Hermes跨端检索所有通知和录音转写，需另行设计用户可控同步、按ID去重的归档和真实回执；本包没有后台同步端口、数据库或手机拉取接口。
+三类“生成报告”默认只分析并返回内容，不自动写长期记忆。2.2提供显式开启的资料同步、版本去重、事务回执和SQLite归档，通过原生Hermes监听接收。只查询已归档来源，不拉取手机未同步的数据库，不上传原音频。
 
 ## 官方安装入口的参考范围
 
@@ -134,4 +134,4 @@ python3 -m unittest discover -s sunmate-hermes/tests -v
 
 以上为源码仓库的开发命令。打包器更新 `manifest.json`，在 `build_output/hermes-release/` 生成按版本命名的完整 ZIP / tar.gz 及 `SHA256SUMS-版本号`，不覆盖2.0旧包。离线解压后运行其中 `setup_hermes.sh`；资源无需联网下载，真实 API 自检仍需要能连接目标 Hermes。
 
-`tests/fixtures/current-app-requests.json` 是使用未改动App的AgentClient，通过本机HTTP回环捕获的五类合成请求（不含真实通知、音频或凭据）；测试记录请求代码摘要。App请求代码变动后应重新捕获并核对，不能只修改兼容版本声明。本地回归验证安装/协议与请求形态，不冒充真实模型的技能加载或业务效果验收。
+`tests/fixtures/current-app-requests.json` 是使用配套App的真实AgentClient，通过本机HTTP回环捕获的五类合成请求（不含真实通知、音频或凭据）；测试记录请求代码摘要。App请求代码变动后应重新捕获并核对，不能只修改兼容版本声明。本地回归验证安装/协议与请求形态，不冒充真实模型的技能加载或业务效果验收。
