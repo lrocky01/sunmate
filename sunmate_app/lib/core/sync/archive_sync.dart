@@ -348,6 +348,35 @@ class ArchiveSyncController extends ChangeNotifier
     return row;
   }
 
+  /// A server-created version already starts at revision 1. Seed that receipt
+  /// before the phone can publish a visibility change as revision 2.
+  Future<void> adoptServerRecord(Map<String, dynamic> body, String target) => _lock(() async {
+    await ready;
+    if (!loaded || !config.paired || _target != target ||
+        !['transcript', 'summary'].contains(body['kind']) || body['visible'] != true ||
+        body['id'] is! String || body['payload'] is! Map<String, dynamic>) throw const ArchiveSyncException('服务器资料来源或目标不匹配。');
+    final kind = body['kind'] as String;
+    final source = ArchiveSource(body['id'], kind,
+        kind == 'summary' ? 'summary' : body['payload']['purpose'],
+        DateTime.parse(body['timestamp']), Map<String, dynamic>.from(body['payload']));
+    if (!['meeting', 'lifelog', 'summary'].contains(source.category) ||
+        jsonEncode(canonicalValue(source.body)) != jsonEncode(canonicalValue(body))) throw const ArchiveSyncException('服务器资料格式不匹配。');
+    final known = _outbox.values.where((r) => r['target'] == _target && r['record']['id'] == source.id).toList();
+    final sha = await source.sha;
+    final base = known.where((r) => r['record']['revision'] == 1 && r['record']['sha'] == sha).toList();
+    if (known.isNotEmpty && base.length != 1) throw const ArchiveSyncException('服务器起始版本冲突，已有版本保留。');
+    final row = base.isEmpty ? await _enqueue(source) : base.single;
+    if (row['status'] == 'confirmed') return;
+    final record = row['record'] as Map;
+    final ref = {for (final k in ['id', 'revision', 'sha']) k: record[k]};
+    final receipt = await transport(config.url, config.token).exchange('receipts', config.identity, [ref]);
+    if (receipt.length != 1 || ref.keys.any((k) => receipt.single[k] != ref[k]) ||
+        !['accepted', 'already_present'].contains(receipt.single['status'])) throw const ArchiveSyncException('服务器结果回执尚未确认。');
+    await _put({...row, 'status': 'confirmed'});
+    _seen.putIfAbsent(source.id, () => record['sha']);
+    await _saveSourceState();
+  });
+
   Future<void> _observe({bool baseline = false}) async {
     final before = sourceGeneration?.call();
     current = await sources();

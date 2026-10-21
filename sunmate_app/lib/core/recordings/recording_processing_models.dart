@@ -348,6 +348,7 @@ class PartTranscript {
 
 class SavedRecordingSummary {
   final String id, kind, scope, inputFingerprint, text;
+  final bool serverOrigin;
   final DateTime created;
   final bool partial;
   final DateTime? from, to;
@@ -362,6 +363,7 @@ class SavedRecordingSummary {
       required this.created,
       required this.inputIds,
       this.sourceVersions = const {},
+      this.serverOrigin = false,
       this.partial = false,
       this.from,
       this.to});
@@ -376,6 +378,7 @@ class SavedRecordingSummary {
         'to': to?.toUtc().toIso8601String(),
         'inputIds': inputIds,
         'sourceVersions': sourceVersions,
+        'serverOrigin': serverOrigin,
       };
   factory SavedRecordingSummary.fromJson(Map<String, dynamic> v) {
     final versions = Map<String, String>.from(v['sourceVersions'] ?? {});
@@ -420,6 +423,7 @@ class SavedRecordingSummary {
         created: DateTime.parse(v['created']),
         inputIds: List<String>.from(v['inputIds']),
         sourceVersions: versions,
+        serverOrigin: v['serverOrigin'] == true,
         partial: v['partial'],
         from: v['from'] == null ? null : DateTime.parse(v['from']),
         to: v['to'] == null ? null : DateTime.parse(v['to']));

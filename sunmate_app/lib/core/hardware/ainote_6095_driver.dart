@@ -34,6 +34,33 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   static const _diagnosticsKey = 'sunmate_ble_diagnostics_v1';
   static const _ancsKey = 'sunmate_ble_requires_ancs';
   final _ios = IosBleConnection();
+  String? _nativeConnectionEpoch;
+  Future<bool> prepareNativeBackground({Map<String, dynamic>? activePolicy}) async {
+    if (!_ios.isSupported || !_canReceiveNotification || !_fileChannelReady ||
+        _profile?.protocol != RecorderProtocol.telink) return false;
+    final generation = _generation;
+    final epoch = _nativeConnectionEpoch;
+    if (epoch == null || !await _longFiles.quiesceForNative()) return false;
+    if (generation != _generation || !_canReceiveNotification || !_fileChannelReady || epoch != _nativeConnectionEpoch) {
+      _longFiles.resumeFromNative(clean: false); return false;
+    }
+    try {
+      await _ios.armBackground(_device!.remoteId.str, {
+        'sn': _serialNumber, 'connection_epoch': epoch,
+        'purpose': _longRecordings.snapshot.active?.purpose?.name ?? _longRecordings.snapshot.preferred.name,
+        'activeSession': _longFiles.snapshot.activeSessionId,
+        'activePolicy': activePolicy,
+      });
+      return true;
+    } catch (_) { _longFiles.resumeFromNative(clean: false); return false; }
+  }
+  Future<void> resumeAfterNativeBackground(bool clean) async {
+    _longFiles.resumeFromNative(clean: clean);
+    if (clean && _canReceiveNotification) {
+      await _sendJson(BleJsonRpc.getStatus(), '后台恢复只读状态');
+      await _longFiles.initialize();
+    }
+  }
   final _audioReceiver = OpusStreamReceiver();
   final RecorderKeyStore _keyStore;
   final RecorderIdentityStore _identityStore = RecorderIdentityStore();
@@ -272,7 +299,7 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   String get audioStatistics =>
       '通知=$_audioNotificationCount；接收字节=$_audioReceivedBytes；会话外忽略=$_audioOutsideSession；最近完整录音帧=$_lastAudioFrameCount';
   String get diagnosticText => [
-        'SunMate 1.0.33+34',
+        'SunMate 1.0.34+35',
         '通知回传: 已接收=$_notificationsDelivered；已忽略=$_notificationsIgnored；无效=$_notificationsInvalid',
         '长录文件通道: $_fileChannelReady；同步中=${longFileLibrary.busy}；待重连=${longFileLibrary.needsReconnect}；本机可播放=${longFileLibrary.recordings.where((r) => r.canPlay).length}',
         '长录目录: ${_longFiles.catalogDiagnostics}',
@@ -1138,6 +1165,8 @@ class AiNote6095Driver implements HardwareDeviceDriver, RecorderSettingsDevice {
   }
 
   void _handleNativeEvent(Map<String, dynamic> event, {bool snapshot = false}) {
+    if (event['state'] == 2 && event['connection_epoch'] is String) _nativeConnectionEpoch = event['connection_epoch'];
+    if (event['state'] == 0) _nativeConnectionEpoch = null;
     if (event['state'] is int) _nativePeripheralState = event['state'] as int;
     if (event['system_connected_match'] is bool) {
       _systemConnectedMatch = event['system_connected_match'] as bool;

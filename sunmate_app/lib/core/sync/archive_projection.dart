@@ -5,7 +5,7 @@ import 'archive_models.dart';
 
 /// Explicit allowlist: no file paths, ASR jobs, tokens, card credentials or intermediate reports.
 Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
-    bool Function(String) allowsNotification) async {
+    bool Function(String) allowsNotification, {String? serverTarget}) async {
   final hidden = (await store.readAll('hidden')).map((v) => v['id']).toSet();
   final sessions = {
     for (final row in await store.readAll('sessions'))
@@ -19,6 +19,30 @@ Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
   final parts = [
     for (final row in await store.readAll('parts')) ProcessingPart.fromJson(row)
   ];
+  final serverTranscripts = <String, Map<String, dynamic>>{};
+  final serverSummaries = <String, Map<String, dynamic>>{};
+  final serverRecords = <String, Map<String, dynamic>>{};
+  final uploaded = <String, Set<int>>{};
+  if (serverTarget != null) {
+    for (final row in await store.readAll('background_results')) {
+      if (row['target'] != serverTarget || row['body'] is! Map) continue;
+      final body = Map<String, dynamic>.from(row['body']);
+      if (row['kind'] == 'audio' && body['metadata'] is Map && body['state'] != 'awaiting_upload') {
+        final m = body['metadata'];
+        final current = parts.where((p) => p.active && p.sessionId == m['session'] && p.source.part == m['part'] && p.source.sha256 == m['sourceSha']);
+        if (current.isNotEmpty) (uploaded[m['session']] ??= {}).add(m['part']);
+      }
+      final record = body['archiveRecord'];
+      if (record is! Map<String, dynamic> || row['applied'] != true) continue;
+      serverRecords[record['id']] = record;
+      if (row['kind'] == 'audio' && body['state'] == 'complete') {
+        final m = body['metadata'];
+        serverTranscripts['${m['session']}:${m['part']}:${m['sourceSha']}'] = record;
+      } else if (row['kind'] == 'summary') {
+        serverSummaries[await contentFingerprint(['server-summary', row['remoteId'] ?? row['id']])] = record;
+      }
+    }
+  }
   bool complete(ProcessingSession s) {
     final active = parts.where((p) => p.sessionId == s.id && p.active).toList()
       ..sort((a, b) => a.source.part.compareTo(b.source.part));
@@ -59,8 +83,9 @@ Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
           'timeConfidence': s.estimatedAnchor == null ? 'unknown' : 'estimated',
           'observedStart': s.observedStart?.toUtc().toIso8601String(),
           'observedEnd': s.observedEnd?.toUtc().toIso8601String(),
-          'audioLocation': 'phone_and_card',
-          'audioUploaded': false,
+          'audioLocation': (uploaded[s.id]?.isNotEmpty ?? false) ? 'phone_card_and_private_server' : 'phone_and_card',
+          'audioUploaded': complete(s) && uploaded[s.id]?.length == s.totalParts,
+          if (uploaded[s.id]?.isNotEmpty ?? false) 'uploadedParts': uploaded[s.id]!.length,
         },
         aliases: {
           'session:${s.id}'
@@ -76,6 +101,13 @@ Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
       'segment_${t.id}',
       for (var i = 0; i < t.spans.length; i++) 'segment_${t.id}_$i'
     };
+    final remote = serverTranscripts[p.id];
+    if (remote != null) {
+      result.add(ArchiveSource(remote['id'], 'transcript', s.purpose!.name,
+          DateTime.parse(remote['timestamp']), Map<String, dynamic>.from(remote['payload']),
+          aliases: aliases, visible: p.active && !aliases.any(hidden.contains)));
+      continue;
+    }
     // Hiding any sentence hides this complete source version from server queries.
     final visible = p.active && !aliases.any(hidden.contains);
     final start = p.offsetMs == null
@@ -139,7 +171,13 @@ Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
     if (s.kind == 'intermediate') continue;
     final dependencies =
         result.where((v) => v.aliases.any(s.inputIds.contains)).toList();
-    final visible = dependencies.every((v) => v.visible);
+    final visible = dependencies.every((v) => v.visible) && (!s.serverOrigin || s.inputIds.every((id) => dependencies.any((v) => v.aliases.contains(id))));
+    final remote = serverSummaries[s.id];
+    if (remote != null) {
+      result.add(ArchiveSource(remote['id'], 'summary', 'summary', DateTime.parse(remote['timestamp']),
+          Map<String, dynamic>.from(remote['payload']), aliases: {s.id, 'summary:${s.id}'}, visible: visible));
+      continue;
+    }
     result.add(ArchiveSource(
         'summary:${s.id}',
         'summary',
@@ -170,6 +208,13 @@ Future<List<ArchiveSource>> projectArchive(RecordingContentStore store,
         },
         aliases: {'summary:${s.id}'},
         visible: visible));
+  }
+  // A superseded source or unimported result cannot remain query-visible merely
+  // because the server originally committed it before the phone reconciled.
+  for (final record in serverRecords.values) {
+    if (result.any((v) => v.id == record['id'])) continue;
+    result.add(ArchiveSource(record['id'], record['kind'], record['kind'] == 'summary' ? 'summary' : record['payload']['purpose'],
+      DateTime.parse(record['timestamp']), Map<String, dynamic>.from(record['payload']), visible: false));
   }
   return result;
 }

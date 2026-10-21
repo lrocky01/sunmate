@@ -1,7 +1,7 @@
 {
   "product": "sunmate-hermes",
-  "version": "2.2.0",
-  "appVersion": "1.0.33+34",
+  "version": "2.3.0",
+  "appVersion": "1.0.34+35",
   "transport": "Hermes native /v1/chat/completions + opt-in /sunmate/v1 archive; same HTTP listener",
   "requests": {
     "meeting": {
@@ -58,5 +58,15 @@
     "separateClientCredentialRequired": true,
     "prepareCommand": "python3 prepare_archive.py --hermes-home CHOSEN_HOME --initialize-archive",
     "automaticSyncDefault": false
+  },
+  "audio": {
+    "schema": "sunmate.audio.v1",
+    "sameNativeListener": true,
+    "uploadDefault": false,
+    "serverProcessingDefault": false,
+    "resultDelivery": "foreground_cursor_pull",
+    "backgroundDelivery": "iOS system scheduling; user force-quit requires reopening",
+    "cardOriginalsDeleted": false,
+    "rawAudioUpload": true
   }
 }

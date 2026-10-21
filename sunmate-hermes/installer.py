@@ -20,13 +20,13 @@ import urllib.parse
 import urllib.request
 import uuid
 
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 SKILLS = (
     "lifelog-daily-review", "meeting-diarize-process", "notification-digest",
     "context-memory-query", "sunmate-doctor",
 )
-ARCHIVE_FILES = ("ARCHIVE.md", "prepare_archive.py", *(
-    "archive_runtime/" + name for name in ("__init__.py", "store.py", "service.py", "native_api.py", "plugin.py", "plugin.yaml")))
+ARCHIVE_FILES = ("ARCHIVE.md", "BACKGROUND.md", "prepare_archive.py", *(
+    "archive_runtime/" + name for name in ("__init__.py", "store.py", "service.py", "native_api.py", "audio_jobs.py", "plugin.py", "plugin.yaml")))
 ROOT = Path(__file__).resolve().parent
 MAX_RESPONSE = 2 * 1024 * 1024
 
@@ -387,7 +387,7 @@ def check_stream(base, key, model, timeout):
 
 
 def report_app_capabilities(stream_checked=False):
-    say("App 适配：SunMate 1.0.33+34；兼容会议/随身文字请求及 sunmate.data.v1 通知请求。")
+    say("App 适配：SunMate 1.0.34+35；兼容会议/随身文字请求及 sunmate.data.v1 通知请求。")
     say("能力边界：支持显式开启通知、会议/随身转写和结果同步；各类自动同步默认关闭，历史补传需选择范围。")
     say("会议音频由 App 发往私有 ASR；本包不接管 ASR、蓝牙、卡片密钥或手机存储。")
     say("三类报告返回 Markdown，由 App 保存；业务效果及手机侧尚未验证。")

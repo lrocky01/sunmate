@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/notifications/mobile_notification_manager.dart';
 import '../core/sync/archive_projection.dart';
 import '../core/sync/archive_sync.dart';
+import '../core/sync/archive_models.dart';
 import '../core/recordings/local_content_store.dart';
 import 'recording_processing_provider.dart';
 
@@ -11,7 +12,8 @@ final archiveSyncProvider =
     ChangeNotifierProvider<ArchiveSyncController>((ref) {
   final store = ref.watch(recordingContentStoreProvider);
   final policy = MobileNotificationManager().appPolicy;
-  final controller = ArchiveSyncController(
+  late final ArchiveSyncController controller;
+  controller = ArchiveSyncController(
       store: store,
       sourceGeneration: store is FileRecordingContentStore
           ? () => jsonEncode([
@@ -25,7 +27,7 @@ final archiveSyncProvider =
       sources: () async {
         await policy.ready;
         if (!policy.loaded) throw const FormatException('通知权限尚未安全读取');
-        return projectArchive(store, policy.allows);
+        return projectArchive(store, policy.allows, serverTarget: jsonEncode(canonicalValue([controller.config.url, controller.config.identity])));
       });
   final timer = Timer.periodic(const Duration(seconds: 20), (_) {
     if (controller.foreground) unawaited(controller.refresh());

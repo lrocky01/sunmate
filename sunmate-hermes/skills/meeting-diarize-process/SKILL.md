@@ -2,7 +2,7 @@
 name: meeting-diarize-process
 description: 从 SunMate 提供的会议转写和说话人分段提炼会议决议、讨论要点与可溯源的待办；用户要求会议纪要或行动项时使用。
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   hermes:
     category: sunmate
 ---

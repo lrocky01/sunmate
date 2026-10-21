@@ -16,7 +16,7 @@ def prepare(home, source=None):
     target = home / 'plugins' / 'sunmate_archive'
     if target.exists() or target.is_symlink() or home.is_symlink() or target.parent.is_symlink():
         raise ValueError('existing_plugin_preserved')
-    names = ['__init__.py', 'store.py', 'service.py', 'native_api.py', 'plugin.py', 'plugin.yaml']
+    names = ['__init__.py', 'store.py', 'service.py', 'native_api.py', 'audio_jobs.py', 'plugin.py', 'plugin.yaml']
     if any((source / name).is_symlink() for name in names):
         raise ValueError('unsafe_source')
     target.mkdir(parents=True, mode=0o700)

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../core/sync/archive_sync.dart';
 import '../core/sync/archive_models.dart';
 import '../providers/archive_sync_provider.dart';
+import 'recording_background_page.dart';
 
 class ArchiveSyncPage extends ConsumerStatefulWidget {
   const ArchiveSyncPage({super.key});
@@ -160,6 +161,13 @@ class _ArchiveSyncPageState extends ConsumerState<ArchiveSyncPage> {
                 child: Text(error ?? sync.message!,
                     style:
                         TextStyle(color: Theme.of(context).colorScheme.error))),
+          const Divider(height: 32),
+          ListTile(contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.cloud_upload_outlined),
+              title: const Text('后台录音与服务器处理'),
+              subtitle: const Text('会议、随身记录的音频上传、ASR 和结果回传；默认关闭'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const RecordingBackgroundPage()))),
           const Divider(height: 32),
           Text('自动同步', style: Theme.of(context).textTheme.titleMedium),
           const Text(

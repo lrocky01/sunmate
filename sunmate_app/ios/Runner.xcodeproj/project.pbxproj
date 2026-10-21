@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A25610210000000000000005 /* RecorderBackgroundReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25610210000000000000006 /* RecorderBackgroundReceiver.swift */; };
+		A25610210000000000000003 /* RecorderBackgroundTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25610210000000000000004 /* RecorderBackgroundTransfer.swift */; };
+		A25610210000000000000001 /* RecorderBackgroundFiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25610210000000000000002 /* RecorderBackgroundFiles.swift */; };
 		A25610200000000000000001 /* RecorderLocalAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = A25610200000000000000002 /* RecorderLocalAudio.swift */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
@@ -16,6 +19,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A25610210000000000000006 /* RecorderBackgroundReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderBackgroundReceiver.swift; sourceTree = "<group>"; };
+		A25610210000000000000004 /* RecorderBackgroundTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderBackgroundTransfer.swift; sourceTree = "<group>"; };
+		A25610210000000000000002 /* RecorderBackgroundFiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderBackgroundFiles.swift; sourceTree = "<group>"; };
 		A25610200000000000000002 /* RecorderLocalAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecorderLocalAudio.swift; sourceTree = "<group>"; };
 		1498D2321E8E86640040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
@@ -75,6 +81,9 @@
 			children = (
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				A25610200000000000000002 /* RecorderLocalAudio.swift */,
+				A25610210000000000000006 /* RecorderBackgroundReceiver.swift */,
+				A25610210000000000000004 /* RecorderBackgroundTransfer.swift */,
+				A25610210000000000000002 /* RecorderBackgroundFiles.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 				97C146F11CF9000F007C117D /* Main.storyboard */,
 				97C146F41CF9000F007C117D /* LaunchScreen.storyboard */,
@@ -197,6 +206,9 @@
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				A25610200000000000000001 /* RecorderLocalAudio.swift in Sources */,
+				A25610210000000000000005 /* RecorderBackgroundReceiver.swift in Sources */,
+				A25610210000000000000003 /* RecorderBackgroundTransfer.swift in Sources */,
+				A25610210000000000000001 /* RecorderBackgroundFiles.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

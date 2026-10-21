@@ -32,4 +32,13 @@ class IosBleConnection {
         'diagnostics', {'remote_id': remoteId}).timeout(timeout);
     return value ?? {};
   }
+
+  Future<void> armBackground(String remoteId, Map<String, dynamic> plan) async {
+    if (!isSupported) return;
+    await _methods.invokeMethod<void>('background_arm', {'remote_id': remoteId, ...plan}).timeout(timeout);
+  }
+  Future<void> enableRestoration(bool enabled) async {
+    if (!isSupported) return;
+    await _methods.invokeMethod<void>('background_restore', {'enabled': enabled}).timeout(timeout);
+  }
 }

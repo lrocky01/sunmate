@@ -58,6 +58,25 @@ class RecorderLongFileSync {
   Timer? _livePoll;
   bool _statusQueryPending = false;
   bool _automaticPaused = false;
+  bool _nativeHandoff = false;
+
+  /// Stop new reads, finish the current protocol transaction, then hand off.
+  /// No cancellation packet exists; a timeout requires a fresh authenticated link.
+  Future<bool> quiesceForNative() async {
+    _nativeHandoff = true;
+    _autoTimer?.cancel();
+    _autoTimer = null;
+    _livePoll?.cancel();
+    try { await _operation?.timeout(progressTimeout + const Duration(seconds: 2)); }
+    catch (_) { _poison('后台交接未完成，保留分段；普通重连后继续。'); }
+    return !_poisoned && !_disposed && _operation == null;
+  }
+
+  void resumeFromNative({required bool clean}) {
+    _nativeHandoff = false;
+    if (!clean) { _poison('原生文件通道待重连验证，已有音频保留。'); return; }
+    _scheduleAutomatic();
+  }
   Completer<List<RecorderLongFileEntry>>? _listing;
   final Map<String, RecorderLongFileEntry> _listEntries = {};
   _Download? _download;
@@ -165,6 +184,7 @@ class RecorderLongFileSync {
   }
 
   void connectionLost() {
+    _nativeHandoff = false;
     if (_activeSession != null)
       _signal(SegmentSignalKind.uncertain, _activeSession!);
     _markActiveUnconfirmed();
@@ -324,7 +344,7 @@ class RecorderLongFileSync {
   }
 
   void _scheduleAutomatic() {
-    if (_disposed ||
+    if (_nativeHandoff || _disposed ||
         _poisoned ||
         _automaticPaused ||
         !isReady() ||
@@ -339,7 +359,7 @@ class RecorderLongFileSync {
   }
 
   Future<void> _drainAutomatic() async {
-    if (_disposed ||
+    if (_nativeHandoff || _disposed ||
         _operation != null ||
         _poisoned ||
         _automaticPaused ||
@@ -397,7 +417,7 @@ class RecorderLongFileSync {
 
   Future<bool> _run(Future<void> Function(int) work,
       {bool allowRecording = false}) {
-    if (_operation != null) return Future.value(false);
+    if (_nativeHandoff || _operation != null) return Future.value(false);
     final operation = _execute(work, allowRecording: allowRecording);
     _operation = operation;
     _changed();

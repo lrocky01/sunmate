@@ -2,7 +2,7 @@
 name: lifelog-daily-review
 description: 将 SunMate 提供的指定时间范围内的随身语音转写、书签和通知融合复盘；用户要求复盘一段时间、总结一天或分析相关事件时使用。
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   hermes:
     category: sunmate
 ---

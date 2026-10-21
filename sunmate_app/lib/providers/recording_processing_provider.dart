@@ -9,6 +9,7 @@ import '../core/recordings/recording_processing_controller.dart';
 import 'device_provider.dart';
 import 'server_config_provider.dart';
 import 'archive_sync_provider.dart';
+import 'recording_background_provider.dart';
 
 final recordingContentStoreProvider =
     Provider<RecordingContentStore>((ref) => FileRecordingContentStore());
@@ -19,6 +20,7 @@ final recordingLocalAudioProvider =
 final recordingProcessingProvider =
     ChangeNotifierProvider<RecordingProcessingController>((ref) {
   final manager = MobileNotificationManager();
+  final ownership = ref.watch(recordingWorkOwnershipProvider);
   final controller = RecordingProcessingController(
       content: ref.watch(recordingContentStoreProvider),
       audioStore: ref.watch(recordingAudioStoreProvider),
@@ -26,10 +28,16 @@ final recordingProcessingProvider =
       asr: () => ref.read(asrServiceProvider),
       agent: () => ref.read(agentClientProvider),
       archive: ref.read(archiveSyncProvider),
+      serverOwnedAsr: (id) => !ownership.loaded || ownership.serverAsr(id),
       allowsNotification: manager.appPolicy.allows);
   final signals =
       ref.read(deviceFactoryProvider).bleDriver.segmentSignals.listen((signal) {
-    unawaited(controller.accept(signal));
+    unawaited(() async {
+      await ownership.capture(signal);
+      await controller.accept(signal);
+    }().catchError((Object _) {
+      controller.message = '本次录音的处理归属尚未保存，保留原音频，未启动自动转写。';
+    }));
   });
   final notifications = manager.notificationStream.listen((entry) {
     unawaited(controller.addTimelineEntry(entry).catchError((Object _) {

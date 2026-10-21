@@ -1,15 +1,15 @@
-# SunMate × Hermes 2.2.0
+# SunMate × Hermes 2.3.0
 
-适配 **SunMate App 1.0.33+34**。本包包含五个技能、私有资料接收和只读查询插件；通知、会议/随身转写及正式总结可按开关归档，之后直接问答时按资料引用读取。同步复用 Hermes 原生 HTTP 服务，不接官方 Relay，不新建守护进程，不改录音卡鉴权或密钥。2.0/2.1旧包保留。
+适配 **SunMate App 1.0.34+35**。本包包含五个技能、私有资料接收和只读查询插件；通知、会议/随身转写及正式总结可按开关归档，另可显式开启后台音频上传、服务器私有 ASR 和自动总结，之后直接问答时按资料引用读取。同步复用 Hermes 原生 HTTP 服务，不接官方 Relay，不新建守护进程，不改录音卡鉴权或密钥。此前版本安装包保留。
 
 ## 离线安装：先安装，再由你启用
 
-将 `sunmate-hermes-2.2.0.zip` 和 `SHA256SUMS-2.2.0` 放在 Hermes 所在电脑的同一目录。校验文件同时列出ZIP和tar.gz；只下载ZIP时校验对应一行：
+将 `sunmate-hermes-2.3.0.zip` 和 `SHA256SUMS-2.3.0` 放在 Hermes 所在电脑的同一目录。校验文件同时列出ZIP和tar.gz；只下载ZIP时校验对应一行：
 
 ```bash
 # macOS；Linux 可将 shasum -a 256 -c 换成 sha256sum -c
-grep 'sunmate-hermes-2.2.0.zip$' SHA256SUMS-2.2.0 | shasum -a 256 -c
-unzip sunmate-hermes-2.2.0.zip
+grep 'sunmate-hermes-2.3.0.zip$' SHA256SUMS-2.3.0 | shasum -a 256 -c
+unzip sunmate-hermes-2.3.0.zip
 cd sunmate-hermes
 ```
 
@@ -35,19 +35,44 @@ bash setup_hermes.sh --hermes-home "$HOME/.hermes" --check --check-stream
 
 **保留已有资料：** 如果 `sunmate-archive/config.json` 已存在，第二步去掉 `--initialize-archive`，保留同一库身份和凭据。若 `plugins/sunmate_archive` 已存在，准备脚本会停止，绝不覆盖：先检查来源和用户修改，将整个旧插件目录移到该profile的 `sunmate-backups/` 下独立目录后再准备；不要移动/清空 `sunmate-archive/`、不要删除Token或数据库。未经管理的目录和用户改动不会被静默接管。技能如有用户改动也会停止；明确保留备份后才使用 `--replace-modified`。
 
+升级已有 2.2.0 插件时，在上面的第2步前检查旧插件来源及用户修改，再在目标 Hermes 电脑保留整个旧插件代码目录：
+
+```bash
+# 非 default 请填同一已选 profile 的实际目录；先安排维护窗口。
+sm_home="$HOME/.hermes"
+sm_backup="$sm_home/sunmate-backups/archive-before-2.3.0-$(date +%Y%m%d-%H%M%S)"
+# 自行保留资料库/配置的一致备份；这里仅移动插件代码，不移动数据和凭据。
+mkdir -p "$sm_backup"
+mv "$sm_home/plugins/sunmate_archive" "$sm_backup/sunmate_archive"
+python3 prepare_archive.py --hermes-home "$sm_home"
+```
+
+已有资料库不要使用 `--initialize-archive`。若准备失败，先保留新目录用于检查，再将备份的旧插件移回原位置；不要清空数据库。新包解压请选择空目录，避免与旧包混合。
+
 插件启用与接收成功分开验证。实际宿主需要支持 `register_platform_handler("api_server", factory)`，本地已核对上游562ee8ab；没有该能力不会另开服务代替。确认当前profile工具集包含 `sunmate_archive` 的 `sunmate_search/get/stats/sync_status`；若该profile限制了工具集，请在Hermes正常工具设置中启用。现有私有HTTPS/隧道入口应同时转发 `/v1` 和 `/sunmate/v1`。本包不自动改反向代理、防火墙、Hermes核心配置或实际服务器设置；具体协议与恢复见 [ARCHIVE.md](ARCHIVE.md)。
 
 ## 手机配置与三类资料验收
 
-1. 按此前自签方式覆盖安装App **1.0.33+34**，保持相同签名身份；不要先卸载。保留卡片绑定、旧密钥和原录音。ASR/Hermes节点保持现有值。
+1. 按此前自签方式覆盖安装App **1.0.34+35**，保持相同签名身份；不要先卸载。保留卡片绑定、旧密钥和原录音。ASR/Hermes节点保持现有值。
 2. 打开「设置 → 私有资料同步」。地址填同一Hermes私有入口下的 `/sunmate/v1`，例如对话为 `https://你的节点/v1`，同步为 `https://你的节点/sunmate/v1`。多profile原生复用路径不能自行改成 `/p/其它profile/sunmate/v1`；本包只挂载选中profile的固定接收路由。
 3. 在服务器本机安全查看对应profile的 `sunmate-archive/client-token.txt`，填入独立同步凭据；不要发到聊天。该Token与Hermes对话Token、卡片共享密钥分开。点击「核对并保存连接」，核对profile及资料库身份。未初始化的库或路径未转发时不会显示成功。
-4. 四类自动同步默认关闭，按需开启「允许采集的通知」「会议资料与转写」「随身记录与转写」「纪要、简报与复盘结果」。开启后处理新增/更新资料；历史资料选范围预览补传。同步不触发ASR，自动转写/会议自动纪要仍由原有独立开关控制。
+4. 四类自动同步默认关闭，按需开启「允许采集的通知」「会议资料与转写」「随身记录与转写」「纪要、简报与复盘结果」。开启后处理新增/更新资料；历史资料选范围预览补传。文字同步本身不触发 ASR；新版后台音频和服务器处理需另外开启。
 5. **通知：** 发送一条无隐私测试通知，确认App收件及同步回执已确认，再在AI对讲问「刚才的测试通知说了什么？」。不需要先生成通知简报；智能体应调用查询工具并说明来源/时间。
-6. **转写：** 会议或随身长录停止后确认音频已归档，在App完成ASR或启用相应用途自动ASR，等待转写同步确认；问「刚才这场会议提到了哪些安排？」。未转写的原音频不在本期服务器归档内。
+6. **转写：** 会议或随身长录停止后确认音频已归档，在App完成ASR或启用相应用途自动ASR，等待转写同步确认；问「刚才这场会议提到了哪些安排？」。未开启新版音频上传时，原音频只在卡片和手机。
 7. **总结：** 生成会议纪要、通知简报或随身复盘，等待结果同步确认，再问对应结论及来源；已归档版本仅按引用读取，不重复发送正文。提问不自动补读手机尚未同步的数据库。服务器恢复旧备份导致版本缺失时，App可核对回执后补传缺项。
 
 同一授权profile的企微与App可查询同一资料库；其他profile不默认共享。对话回显、同步回执、模型实际调用工具是三项不同验收。本包不承诺仅凭安装即可完成实机验收，失败时保留源资料和待发队列，不解绑、不删除录音。
+
+## 后台上传、服务器 ASR 和结果回传
+
+1. 按上文安装/升级 **2.3.0**，选择同一 profile、原资料库和独立同步凭据。服务器需现有 `ffmpeg` 及 Hermes 的 Python/aiohttp；安装器不自动安装依赖。
+2. 在目标 profile 已有 `sunmate-archive/config.json` 中**合并** `audioProcessing`，不要替换整份配置。完整字段见 [BACKGROUND.md](BACKGROUND.md#管理员安装后显式配置)。`asrUrl` 填支持 `/v1/jobs` 的私有 MOSS-ASR 根地址，`hermesUrl` 填此 profile 原生 API 根地址，均不带末尾 `/v1`。凭据写入服务器本机的 0600 普通文件，不粘贴到聊天；ASR 无鉴权时可省略其 Token 文件。
+3. 核对后将 `audioProcessing.enabled` 显式设为 `true`，由你重启目标 profile gateway。私有代理需透传 `/sunmate/v1/audio/`、PUT 及音频请求体，直接到达、不重定向。保留原聊天路径、库身份及凭据。
+4. 手机「设置 → 私有资料同步」核对成功，再进「后台录音与服务器处理」。先开「后台蓝牙收段」，按用途开会议/随身的自动上传、服务器自动转写和自动纪要/复盘。依赖一起开启；默认仅 Wi-Fi，蜂窝许可另选。状态恢复需再正常打开一次 App。
+5. **设置好后再开始新录音**，开始时固定用途、策略及处理归属；不追溯旧录音、不接管已有手机 ASR。先前台短录确认回执，再测试锁屏数分钟。只有已关闭分段可下载；几秒钟内未分段不等于后台失败。
+6. 停止后等待尾段补扫，全部转写及精确完整目录确认后才生成正式纪要/本次复盘。随身融合通知需另外启用允许通知的自动同步，并有可定位时间。回 App 自动取回，或点「核对上传与取回结果」，检查会议逐字稿/纪要、随身时间线/复盘，再直接问 Hermes 已归档内容。
+
+**会议、随身分别测试**：在录音卡管理的「录音设置」先选下次长录用途，再开始录音，每次确认上传回执、转写及总结。原音频保留。iOS 在系统允许时唤醒；强制划掉 App 会中止未完成的系统传输，需重新打开恢复。服务器已收妥的任务可继续。首版结果在回前台取回，不含 APNs 推送，不承诺强退后持续收段。
 
 ## 线上安装入口（同版发布后使用）
 

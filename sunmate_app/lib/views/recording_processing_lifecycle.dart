@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/recording_processing_provider.dart';
 import '../providers/archive_sync_provider.dart';
+import '../providers/recording_background_provider.dart';
+import 'dart:async';
 
 class RecordingProcessingLifecycle extends ConsumerStatefulWidget {
   final Widget child;
@@ -22,10 +24,13 @@ class _RecordingProcessingLifecycleState
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && state != AppLifecycleState.paused) return;
     ref.read(archiveSyncProvider).setForeground(state == AppLifecycleState.resumed);
-    ref
-        .read(recordingProcessingProvider)
-        .setForeground(state == AppLifecycleState.resumed);
+    final processing = ref.read(recordingProcessingProvider);
+    if (state == AppLifecycleState.paused) processing.setForeground(false);
+    unawaited(ref.read(recordingBackgroundProvider).setForeground(state == AppLifecycleState.resumed).then((_) {
+      if (mounted && state == AppLifecycleState.resumed && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) processing.setForeground(true);
+    }));
   }
 
   @override
@@ -38,6 +43,7 @@ class _RecordingProcessingLifecycleState
   Widget build(BuildContext context) {
     ref.watch(archiveSyncProvider);
     ref.watch(recordingProcessingProvider);
+    ref.watch(recordingBackgroundProvider);
     return widget.child;
   }
 }

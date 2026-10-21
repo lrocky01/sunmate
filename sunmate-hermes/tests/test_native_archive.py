@@ -227,7 +227,7 @@ class NativeArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.calls[0][1](fresh, object())
         with self.assertRaises(ValueError):
             mount(fresh, self.root, 'default')  # Never shadow a prior owner.
-        self.assertEqual(len(list(fresh.router.routes())), 3)
+        self.assertEqual(len(list(fresh.router.routes())), 8)
         async with TestClient(TestServer(fresh)) as client:
             response = await client.get('/sunmate/v1/capabilities', headers=self.headers)
             self.assertEqual(response.status, 200)

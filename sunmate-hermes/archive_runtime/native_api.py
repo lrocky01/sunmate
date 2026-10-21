@@ -9,9 +9,10 @@ def mount(app, root, profile, scope_check=None):
     if app.router.frozen:
         raise ValueError('native_router_already_started')
     existing = {resource.canonical for resource in app.router.resources()}
-    if any(path in existing for _, path in ROUTES):
+    if any(path in existing for _, path in ROUTES) or any(
+            path == '/sunmate/v1/audio' or path.startswith('/sunmate/v1/audio/') for path in existing):
         raise ValueError('existing_native_route_preserved')
-    api = ArchiveAPI(root, profile)
+    api = ArchiveAPI(root, profile, native_audio=True)
 
     def reply(status, value):
         return web.json_response(value, status=status, headers={'Cache-Control': 'no-store'})
@@ -46,3 +47,6 @@ def mount(app, root, profile, scope_check=None):
 
     for method, path in ROUTES:
         app.router.add_route(method, path, handle)
+
+    from .audio_jobs import mount_audio
+    mount_audio(app, root, profile, scope_check)

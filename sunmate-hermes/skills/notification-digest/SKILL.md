@@ -2,7 +2,7 @@
 name: notification-digest
 description: 汇总 SunMate 实际提供的手机通知，提炼需关注的提醒和待办，并标注来源；用户要求通知简报或查询谁找过自己时使用。
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   category: sunmate
 ---
 

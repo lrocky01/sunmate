@@ -50,6 +50,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 @property(nonatomic) NSNumber *restoreState;
 @property(nonatomic, retain) NSMutableDictionary *sunmateAncsRequired;
 @property(nonatomic, retain) NSMutableDictionary *sunmateDiagnostics;
+@property(nonatomic, retain) NSMutableDictionary *sunmateConnectionEpochs;
 @property(nonatomic, copy) FlutterEventSink sunmateEventSink;
 @end
 
@@ -72,9 +73,10 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     instance.scanCounts = [NSMutableDictionary new];
     instance.logLevel = LDEBUG;
     instance.showPowerAlert = @(YES);
-    instance.restoreState = @(NO);
+    instance.restoreState = @([[NSUserDefaults standardUserDefaults] boolForKey:@"sunmate.background.restore"]);
     instance.sunmateAncsRequired = [NSMutableDictionary new];
     instance.sunmateDiagnostics = [NSMutableDictionary new];
+    instance.sunmateConnectionEpochs = [NSMutableDictionary new];
 
     [registrar addMethodCallDelegate:instance channel:methodChannel];
     FlutterMethodChannel *sunmateChannel = [FlutterMethodChannel
@@ -83,6 +85,11 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     FlutterEventChannel *sunmateEvents = [FlutterEventChannel
         eventChannelWithName:@"sunmate/ble_connection_events" binaryMessenger:[registrar messenger]];
     [sunmateEvents setStreamHandler:instance];
+    // A previously opted-in restoration uses the same manager/identifier at launch.
+    if ([instance.restoreState boolValue]) {
+        instance.centralManager = [[CBCentralManager alloc] initWithDelegate:instance queue:nil
+            options:@{CBCentralManagerOptionRestoreIdentifierKey: @"flutterBluePlusRestoreIdentifier"}];
+    }
 }
 
 - (FlutterError *)onListenWithArguments:(id)arguments eventSink:(FlutterEventSink)events
@@ -103,6 +110,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     NSMutableDictionary *snapshot = [NSMutableDictionary dictionaryWithDictionary:
         self.sunmateDiagnostics[remoteId] ?: @{}];
     snapshot[@"remote_id"] = remoteId;
+    snapshot[@"connection_epoch"] = self.sunmateConnectionEpochs[remoteId] ?: [NSNull null];
     snapshot[@"requires_ancs"] = self.sunmateAncsRequired[remoteId] ?: @NO;
     snapshot[@"state"] = @(peripheral.state);
     snapshot[@"central_state"] = @(self.centralManager.state);
@@ -133,6 +141,8 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 - (void)sunmateRecord:(NSString *)event peripheral:(CBPeripheral *)peripheral error:(NSError *)error
 {
     NSString *remoteId = peripheral.identifier.UUIDString;
+    if ([event isEqualToString:@"connected"]) { self.sunmateConnectionEpochs[remoteId] = NSUUID.UUID.UUIDString; }
+    if ([event isEqualToString:@"disconnected"] || [event isEqualToString:@"connect_failed"]) { [self.sunmateConnectionEpochs removeObjectForKey:remoteId]; }
     if (self.sunmateAncsRequired[remoteId] == nil) {
         return;
     }
@@ -171,6 +181,28 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
 {
     @try
     {
+        if ([@"background_arm" isEqualToString:call.method]) {
+            NSDictionary *args = call.arguments;
+            CBPeripheral *peripheral = self.connectedPeripherals[args[@"remote_id"]];
+            if (!peripheral || peripheral.state != CBPeripheralStateConnected ||
+                ![args[@"connection_epoch"] isKindOfClass:NSString.class] ||
+                ![self.sunmateConnectionEpochs[args[@"remote_id"]] isEqual:args[@"connection_epoch"]]) {
+                result([FlutterError errorWithCode:@"notConnected" message:@"Verified connected peripheral required" details:nil]);
+                return;
+            }
+            [NSNotificationCenter.defaultCenter postNotificationName:@"SunMateRecorderArm" object:nil
+                userInfo:@{@"peripheral": peripheral, @"config": args}];
+            result(@YES);
+            return;
+        }
+        if ([@"background_restore" isEqualToString:call.method]) {
+            BOOL enabled = [call.arguments[@"enabled"] boolValue];
+            [[NSUserDefaults standardUserDefaults] setBool:enabled forKey:@"sunmate.background.restore"];
+            self.restoreState = @(enabled);
+            // Existing manager is preserved; restoration option takes effect next launch.
+            result(@YES);
+            return;
+        }
         if ([@"configure" isEqualToString:call.method] || [@"diagnostics" isEqualToString:call.method]) {
             NSDictionary *args = [call.arguments isKindOfClass:[NSDictionary class]] ? call.arguments : @{};
             NSString *value = args[@"remote_id"];
@@ -1398,6 +1430,7 @@ typedef NS_ENUM(NSUInteger, LogLevel) {
     // remember the connected peripherals of *this app*
     [self.connectedPeripherals removeObjectForKey:remoteId];
 
+    [NSNotificationCenter.defaultCenter postNotificationName:@"SunMateRecorderDisconnected" object:peripheral];
     [self sunmateRecord:@"disconnected" peripheral:peripheral error:error];
 
     // remove from currently connecting peripherals
@@ -1586,6 +1619,11 @@ didDiscoverCharacteristicsForService:(CBService *)service
     didUpdateValueForCharacteristic:(CBCharacteristic *)characteristic
                               error:(NSError *)error
 {
+    if (!error) {
+        NSMutableDictionary *packet = [@{@"peripheral": peripheral, @"characteristic": characteristic, @"handled": @NO} mutableCopy];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"SunMateRecorderValue" object:packet];
+        if ([packet[@"handled"] boolValue]) { return; }
+    }
     // this function is called on notifications as well as manual reads
     if (error) {
         Log(LERROR, @"didUpdateValueForCharacteristic:");
@@ -1852,6 +1890,7 @@ didDiscoverCharacteristicsForService:(CBService *)service
 
 - (void)peripheralIsReadyToSendWriteWithoutResponse:(CBPeripheral *)peripheral
 {
+    [NSNotificationCenter.defaultCenter postNotificationName:@"SunMateRecorderWritable" object:peripheral];
     Log(LVERBOSE, @"peripheralIsReadyToSendWriteWithoutResponse");
 
     // peripheralIsReadyToSendWriteWithoutResponse is used to signal

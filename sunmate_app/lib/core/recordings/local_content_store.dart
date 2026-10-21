@@ -37,7 +37,11 @@ class FileRecordingContentStore implements RecordingContentStore {
     'attempts',
     'notification_jobs',
     'archive_outbox',
-    'archive_state'
+    'archive_state',
+    'background_policy',
+    'background_owners',
+    'background_state',
+    'background_results'
   };
   Future<Directory> _directory(String collection) async {
     if (!_collections.contains(collection))

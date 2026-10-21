@@ -2,7 +2,7 @@
 name: sunmate-doctor
 description: 检查 SunMate 到 Hermes 原生 API 的配置、鉴权、模型响应及技能可发现性；用户要求测试连接或排查接入失败时使用，可选检查已配置的 ASR。
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   hermes:
     category: sunmate
 ---

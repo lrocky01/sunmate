@@ -75,9 +75,10 @@ def change_client(root, revoke=None):
 class ArchiveAPI:
     """The same authorization, validation and receipts for both HTTP hosts."""
 
-    def __init__(self, root, profile=None):
+    def __init__(self, root, profile=None, native_audio=False):
         self.root = Path(root)
         self.profile = profile
+        self.native_audio = native_audio
 
     def authorize(self, headers):
         config = load_config(self.root)
@@ -99,6 +100,7 @@ class ArchiveAPI:
             base = {'schema': SCHEMA, **identity, 'clientId': client}
             if method == 'GET':
                 return 200, {**base, 'maxBatch': 50, 'rawAudio': False,
+                    'audioJobs': {'schema': 'sunmate.audio.v1', 'nativeRoutes': self.native_audio, 'processorEnabled': self.native_audio and config.get('audioProcessing', {}).get('enabled') is True},
                     'tools': ['sunmate_search', 'sunmate_get', 'sunmate_stats', 'sunmate_sync_status']}
             if any(headers.get('X-Sunmate-' + key) != config[key] for key in ('serverId', 'libraryId')):
                 return 409, {'error': 'identity_changed'}

@@ -105,3 +105,9 @@ class AppCompatibilityTests(unittest.TestCase):
         self.assertFalse(archive['defaultInstalled'])
         self.assertFalse(archive['deployed'])
         self.assertFalse(archive['rawAudioUpload'])
+        audio = self.contract['audio']
+        self.assertTrue(audio['rawAudioUpload'])
+        self.assertFalse(audio['uploadDefault'])
+        self.assertFalse(audio['serverProcessingDefault'])
+        self.assertFalse(audio['cardOriginalsDeleted'])
+        self.assertEqual(audio['resultDelivery'], 'foreground_cursor_pull')

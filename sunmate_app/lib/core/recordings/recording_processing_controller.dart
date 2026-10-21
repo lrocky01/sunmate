@@ -6,6 +6,7 @@ import '../ai/agent_client.dart';
 import '../ai/asr_service.dart';
 import '../audio/recorder_local_audio.dart';
 import '../hardware/recorder_long_file_store.dart';
+import '../hardware/recorder_long_file_models.dart';
 import '../hardware/recorder_long_recordings.dart';
 import '../../models/timeline_entry.dart';
 import 'local_content_store.dart';
@@ -30,6 +31,7 @@ class RecordingProcessingController extends ChangeNotifier {
   final AsrService Function() asr;
   final AgentClient Function() agent;
   final ArchiveReferenceResolver? archive;
+  final bool Function(String session)? serverOwnedAsr;
   final bool Function(String appId) allowsNotification;
   final Map<String, ProcessingSession> _sessions = {};
   final Map<String, ProcessingPart> _parts = {};
@@ -81,6 +83,7 @@ class RecordingProcessingController extends ChangeNotifier {
       required this.asr,
       required this.agent,
       this.archive,
+      this.serverOwnedAsr,
       bool Function(String)? allowsNotification,
       DateTime Function()? notificationClock})
       : notificationClock = notificationClock ?? DateTime.now,
@@ -396,6 +399,7 @@ class RecordingProcessingController extends ChangeNotifier {
   }
 
   Future<void> _request(ProcessingPart p, {required bool manual}) async {
+    if (serverOwnedAsr?.call(p.sessionId) == true) return;
     if (!p.ready || !p.active) return;
     final id = await contentFingerprint([p.id, p.asrOgg, 'moss-diarize-v1']);
     var t = _transcripts[id];
@@ -430,6 +434,9 @@ class RecordingProcessingController extends ChangeNotifier {
     if (!p.ready)
       throw const RecordingProcessingException('片段未准备好，先补齐前段或检查封装。');
     await _request(p, manual: true);
+    if (serverOwnedAsr?.call(p.sessionId) == true) {
+      throw const RecordingProcessingException('本次转写由服务器队列负责，请到后台处理设置核对结果；未重复上传。');
+    }
     ++_requestGeneration;
     final t = transcript(p)!;
     if (t.stage == TranscriptionStage.submissionUnknown) {
@@ -500,6 +507,7 @@ class RecordingProcessingController extends ChangeNotifier {
       if (disposed || !foreground) return;
       final p = _parts[t.partId];
       if (p == null ||
+          serverOwnedAsr?.call(p.sessionId) == true ||
           !p.active ||
           p.transcriptKey != t.id ||
           !p.ready ||
@@ -663,6 +671,70 @@ class RecordingProcessingController extends ChangeNotifier {
             ? 'ASR未返回句级时间，文字可能包含前段边界上下文；仅作整段时间估算。'
             : null;
   }
+
+  Future<void> acceptServerTranscript(Map<String, dynamic> metadata,
+      Map<String, dynamic> result) => _queueLocal(() async {
+    final sessionId = metadata['session'] as String;
+    if (serverOwnedAsr?.call(sessionId) != true) throw const FormatException('本次转写不属于服务器队列');
+    final candidates = partsOf(sessionId).where((p) => p.source.part == metadata['part'] && p.source.sha256 == metadata['sourceSha']).toList();
+    if (candidates.length != 1) throw const FormatException('服务器结果来源未在本机确认');
+    final p = candidates.single;
+    if (!p.ready || p.contextSha != metadata['contextSha'] || p.samples48 != metadata['samples48'] || p.leadSamples48 != metadata['lead48'] || p.offsetSamples48 != metadata['offset48']) throw const FormatException('服务器分段时间证据不匹配');
+    final id = await contentFingerprint([p.id, p.asrOgg, 'moss-diarize-v1']);
+    final old = _transcripts[id];
+    if (old?.stage == TranscriptionStage.complete) return;
+    if (old?.job != null) throw const FormatException('本机任务仍存在，未覆盖');
+    final t = old ?? PartTranscript(id, p.id);
+    final spans = result['spans'] as List;
+    _applyResult(p, t, AsrResult(success: true, rawText: result['text'], segments: [
+      for (final v in spans) DiarizedSegment(speaker: v['speaker'] ?? '', start: (v['startMs'] as num) / 1000, end: (v['endMs'] as num) / 1000, text: v['text'])
+    ]));
+    _transcripts[id] = t;
+    p.transcriptKey = id;
+    await _saveTranscript(t); await _savePart(p); _changed();
+  });
+
+  Future<void> archiveImportedSession(String id) => _queueLocal(() async {
+    final s = _sessions[id];
+    if (s == null || !sessionComplete(s)) throw const FormatException('后台会话缺少连续来源和尾段确认');
+    final existing = (await audioStore.loadRecords()).where((v) => v.serialNumber == s.sn && v.sessionId == s.session).firstOrNull;
+    if (existing?.canPlay == true) return;
+    final parts = partsOf(id).map((p) => p.source).toList();
+    final ogg = await audioStore.assemble(s.sn, s.session, parts);
+    final prepared = await audio.prepare(ogg.relativePath);
+    if (prepared.frames <= 0 || prepared.sampleRate != 16000 || (prepared.durationMs - ogg.durationMs).abs() > 1 ||
+        prepared.frames * 1000 ~/ prepared.sampleRate != prepared.durationMs ||
+        !prepared.relativePath.startsWith('recorder_long_audio_v1/${s.sn}/s${s.session}/') ||
+        await (await audioStore.resolveRelative(prepared.relativePath)).length() <= 44) throw const FormatException('后台会话本地实际解码未通过');
+    final bytes = parts.fold<int>(0, (sum, p) => sum + p.size);
+    await audioStore.saveRecord(RecorderLongAudioRecord(serialNumber: s.sn, sessionId: s.session, purpose: s.purpose,
+      stage: RecorderLongFileStage.saved, totalParts: parts.length, downloadedParts: parts.length, sourceBytes: bytes,
+      receivedBytes: bytes, relativeOggPath: ogg.relativePath, relativePlayablePath: prepared.relativePath,
+      durationMs: prepared.durationMs, savedAt: DateTime.now(), message: '后台来源与尾段已确认，已在前台完成整场校验和本地播放准备。'));
+    _changed();
+  });
+
+  Future<void> acceptServerSummary(String remoteId, Map<String, dynamic> value) => _queueLocal(() async {
+    final s = _sessions[value['session']];
+    if (s == null || serverOwnedAsr?.call(s.id) != true || !sessionComplete(s) ||
+        value['purpose'] != s.purpose?.name || value['text'] is! String || (value['text'] as String).trim().isEmpty ||
+        (value['text'] as String).length > 500000) throw const FormatException('服务器总结来源不完整');
+    final parts = partsOf(s.id);
+    if (parts.any((p) => transcript(p)?.stage != TranscriptionStage.complete) ||
+        (value['parts'] as List).length != parts.length) throw const FormatException('服务器总结缺少本机转写证据');
+    final id = await contentFingerprint(['server-summary', remoteId]);
+    if (_summaries.containsKey(id)) return;
+    final sources = {...parts.map((p) => p.id), for (final source in value['sources'] as List? ?? [])
+      if (source is String && source.startsWith('notification:')) source.substring('notification:'.length)};
+    final saved = SavedRecordingSummary(id: id, kind: s.purpose!.name, scope: s.id, serverOrigin: true,
+      inputFingerprint: await contentFingerprint(value['parts']), text: value['text'], created: DateTime.now(),
+      inputIds: sources.toList(), sourceVersions: await _summarySourceVersions(sources),
+      partial: s.purpose == LongRecordingPurpose.lifelog && (s.estimatedAnchor == null || _entries.values.any((e) =>
+        e.sourceType == TimelineSourceType.appNotification && !_hidden.contains(e.id) && e.appIdentifier != null && allowsNotification(e.appIdentifier!) &&
+        e.timestamp.isAfter(s.estimatedAnchor!) && e.timestamp.isBefore(s.observedEnd!) && !sources.contains(e.id))),
+      from: s.estimatedAnchor ?? s.observedStart, to: s.observedEnd);
+    await content.put('summaries', id, saved.toJson()); _summaries[id] = saved; _changed();
+  });
 
   List<TimelineEntry> get timelineEntries {
     final entries = <TimelineEntry>[];
@@ -868,6 +940,7 @@ class RecordingProcessingController extends ChangeNotifier {
       for (final s in sessions) {
         if (disposed || !foreground) return;
         if (_summaryRequests.containsKey('meeting:${s.id}') ||
+            serverOwnedAsr?.call(s.id) == true ||
             !s.automaticSummary ||
             !policy.meetingSummary ||
             !sessionComplete(s) ||
@@ -1079,6 +1152,14 @@ class RecordingProcessingController extends ChangeNotifier {
   }
 
   Future<bool> summaryCurrent(SavedRecordingSummary saved) async {
+    if (saved.serverOrigin) {
+      final s = session(saved.scope);
+      if (s == null || !sessionComplete(s) || partsOf(s.id).any((p) => transcript(p)?.stage != TranscriptionStage.complete || !saved.inputIds.contains(p.id))) return false;
+      final versions = await _summarySourceVersions(saved.inputIds.toSet());
+      final sources = await projectArchive(content, allowsNotification);
+      if (saved.inputIds.any((id) => !sources.any((v) => v.visible && v.aliases.contains(id)))) return false;
+      return versions.length == saved.sourceVersions.length && versions.entries.every((v) => saved.sourceVersions[v.key] == v.value);
+    }
     if (saved.kind == 'notification') return _notificationSummaryCurrent(saved);
     if (saved.kind == 'meeting') {
       final s = session(saved.scope);

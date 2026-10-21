@@ -2,7 +2,7 @@
 name: context-memory-query
 description: 检索 SunMate 已提供或真实可访问的历史语音、会议、通知与长期记忆，回答指定时段的事件、决策或承诺；用户查询过去记录时使用。
 metadata:
-  version: "2.2.0"
+  version: "2.3.0"
   hermes:
     category: sunmate
 ---

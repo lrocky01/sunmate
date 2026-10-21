@@ -1,5 +1,5 @@
 {
-  "appVersion": "1.0.33+34",
+  "appVersion": "1.0.34+35",
   "unreleasedSource": false,
   "agentSourceSha256": "368a640665ecf6a01dc166967c68a30f7f6f4c2e6f2b090b8e0c99f01d0f3e16",
   "capture": "Synthetic requests from real Dart AgentClient over loopback HTTP; no real user content or model execution.",
