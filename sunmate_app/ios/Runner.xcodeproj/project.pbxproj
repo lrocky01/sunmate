@@ -138,8 +138,8 @@
 				97C146EA1CF9000F007C117D /* Sources */,
 				97C146EB1CF9000F007C117D /* Frameworks */,
 				97C146EC1CF9000F007C117D /* Resources */,
-				9704239C1EEEF0C300A7D3DE /* Thin Binary */,
 				A61101030000000000000008 /* Embed Watch Content */,
+				9704239C1EEEF0C300A7D3DE /* Thin Binary */,
 			);
 			buildRules = (
 			);

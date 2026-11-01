@@ -810,3 +810,4 @@
 
 - [进行中] 用户授权接续整合并跑通两端云端无签名编译。复用已有Watch原型、手机原生桥/默认关闭的接收与健康只读原型及HAL接入，不重构既有HAL/真实鉴权/密钥/私有端点；保持App版本，不生成IPA、不签名/上传Apple、不下载本机大型工具。
 - [工程] Runner增加跨项目Watch目标依赖和标准Embed Watch Content，workspace纳入Watch项目；Watch版本改用构建变量并与手机核对，Runner残留13目标统一为Podfile既有15。新增仅手动的双端检查，预装Xcode/两端SDK预检，固定Flutter3.35.7及锁定依赖仅云端准备；真实编译后检查嵌入目录、SDK、两端标识/版本/架构及无签名/profile，仅保留文字日志。
+- [首次云端定位] f701163已推，run41279913114独立Watch及Flutter分析/回归/配置通过，两端原生源码完成编译到手机链接阶段后，因Embed Watch排在Flutter Thin Binary之后形成Info.plist/复制依赖环，退出65；不是业务鉴权或服务连接问题。将Watch嵌入移到Thin Binary之前，并补工程图顺序回归，不跳过嵌入或禁用构建校验。

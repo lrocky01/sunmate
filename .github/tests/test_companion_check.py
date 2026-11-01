@@ -31,6 +31,8 @@ class CompanionCheck(unittest.TestCase):
         self.assertEqual((ROOT / 'sunmate_app/ios' / remote['path']).resolve(),
                          ROOT / 'sunmate_app/apple_watch/SunMateWatch.xcodeproj')
         embed, = [objects[v] for v in target['buildPhases'] if objects[v].get('name') == 'Embed Watch Content']
+        phases = [objects[v].get('name', '') for v in target['buildPhases']]
+        self.assertLess(phases.index('Embed Watch Content'), phases.index('Thin Binary'))
         self.assertEqual(embed['dstPath'], '$(CONTENTS_FOLDER_PATH)/Watch')
         product = objects[objects[embed['files'][0]]['fileRef']]
         self.assertEqual(product['path'], 'SunMateWatch.app')
