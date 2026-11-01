@@ -1,6 +1,7 @@
 import 'hardware_device_driver.dart';
 import 'ainote_6095_driver.dart';
 import 'phone_mic_driver.dart';
+import 'apple_watch_driver.dart';
 
 /// 硬件驱动管理工厂
 class HardwareDeviceFactory {
@@ -10,6 +11,7 @@ class HardwareDeviceFactory {
 
   final AiNote6095Driver _aiNoteDriver = AiNote6095Driver();
   final PhoneMicDriver _phoneMicDriver = PhoneMicDriver();
+  final AppleWatchDriver _watchDriver = AppleWatchDriver();
 
   HardwareDeviceDriver? _currentDriver;
 
@@ -27,6 +29,10 @@ class HardwareDeviceFactory {
     }
 
     switch (type) {
+      case HardwareDeviceType.appleWatch:
+        _currentDriver = _watchDriver;
+        await _watchDriver.connect();
+        break;
       case HardwareDeviceType.ainote6095Ble:
         _currentDriver = _aiNoteDriver;
         break;
@@ -42,9 +48,11 @@ class HardwareDeviceFactory {
 
   AiNote6095Driver get bleDriver => _aiNoteDriver;
   PhoneMicDriver get phoneMicDriver => _phoneMicDriver;
+  AppleWatchDriver get watchDriver => _watchDriver;
 
   void dispose() {
     _aiNoteDriver.dispose();
     _phoneMicDriver.dispose();
+    _watchDriver.dispose();
   }
 }

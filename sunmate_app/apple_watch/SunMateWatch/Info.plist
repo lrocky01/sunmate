@@ -6,8 +6,8 @@
 <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.34</string>
-<key>CFBundleVersion</key><string>35</string>
+<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>WKApplication</key><true/>
 <key>WKCompanionAppBundleIdentifier</key><string>com.sunmate.app</string>
 <key>NSMicrophoneUsageDescription</key><string>由你开始录音，在手表保存对讲、会议和随身音频，并按设置同步到自己的手机。</string>

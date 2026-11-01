@@ -4,4 +4,6 @@
    <FileRef
       location = "group:Runner.xcodeproj">
    </FileRef>
+   <FileRef location="group:../apple_watch/SunMateWatch.xcodeproj">
+   </FileRef>
 </Workspace>

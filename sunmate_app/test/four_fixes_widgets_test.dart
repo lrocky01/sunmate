@@ -144,6 +144,7 @@ void main() {
         'synthetic-hermes');
     await tester.enterText(fields.at(0), 'http://192.0.2.6:8000');
     await tester.ensureVisible(find.text('保存节点配置'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('保存节点配置'));
     await tester.pumpAndSettle();
     expect(find.text('已安全保存，重开 App 后自动恢复。'), findsOneWidget);

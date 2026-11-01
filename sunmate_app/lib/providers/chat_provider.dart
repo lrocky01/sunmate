@@ -347,7 +347,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   /// 与文字请求共用队列，保证多段语音按松开顺序转写和回复。
   Future<void> handleVoiceInput(Uint8List audioBytes,
-      {String? voiceMessageId}) {
+      {String? voiceMessageId, String filename = 'speech.opus'}) {
     if (!mounted) return Future<void>.value();
     final id = voiceMessageId ?? finishVoiceInput() ?? beginVoiceInput();
     if (id == null || _voice(id) == null) return Future<void>.value();
@@ -366,7 +366,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (!mounted || epoch != _sessionEpoch || _voice(id) == null) return;
       _replaceVoice(id, VoiceInputPhase.transcribing);
       try {
-        final transcript = await _asrService.transcribeShortAudio(bytes);
+        final transcript = await _asrService.transcribeShortAudio(bytes, filename: filename);
         if (!mounted || epoch != _sessionEpoch || _voice(id) == null) return;
         if (transcript.trim().isEmpty)
           throw const AsrTranscriptionException('未识别到清晰语音，请重新说话。');

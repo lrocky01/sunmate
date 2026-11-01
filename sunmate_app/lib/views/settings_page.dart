@@ -1,5 +1,6 @@
 import 'notification_apps_page.dart';
 import 'archive_sync_page.dart';
+import 'apple_watch_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -144,6 +145,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          ListTile(
+            leading: const Icon(Icons.watch_outlined),
+            title: const Text('Apple Watch 与健康只读'),
+            subtitle: const Text('手表录音原型、离线文件与本机健康数据'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AppleWatchPage())),
+          ),
           ListTile(
             leading: const Icon(Icons.sync),
             title: const Text('私有资料同步'),
@@ -358,6 +366,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             child: Column(
               children: [
+                RadioListTile<HardwareDeviceType>(
+                  title: const Text('Apple Watch 原生录音'),
+                  subtitle: const Text('在手表操作录音；连接状态和本机文件独立于蓝牙卡。'),
+                  value: HardwareDeviceType.appleWatch,
+                  groupValue: currentDriverType,
+                  onChanged: (value) async {
+                    if (value == null) return;
+                    await devNotifier.switchDriverType(value);
+                    buttonNotifier.rebindDriver();
+                  },
+                ),
+                const Divider(height: 1),
                 RadioListTile<HardwareDeviceType>(
                   title: const Text("AiNote 6095 蓝牙录音卡 (Telink 芯片方案)",
                       style: TextStyle(fontSize: 14)),

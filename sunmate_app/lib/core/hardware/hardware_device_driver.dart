@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 /// 硬件设备类型
 enum HardwareDeviceType {
+  /// Apple-managed companion app; recording files are not BLE Opus packets.
+  appleWatch,
   /// AiNote 6095 Telink 蓝牙录音卡
   ainote6095Ble,
 

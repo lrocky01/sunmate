@@ -15,6 +15,7 @@ import 'recorder_device_status.dart';
 import 'recorder_management_page.dart';
 import 'recorder_backup_page.dart';
 import '../main.dart';
+import 'apple_watch_page.dart';
 
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
@@ -61,7 +62,7 @@ class HomePage extends ConsumerWidget {
                           backgroundColor: device.isConnected ? const Color(0xFFE8F5E9) : const Color(0xFFFFF3E0),
                           radius: 28,
                           child: Icon(
-                            activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
+                            activeDriver.deviceType == HardwareDeviceType.appleWatch ? Icons.watch_outlined : activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
                                 ? Icons.phone_android
                                 : Icons.bluetooth,
                             color: device.isConnected ? Colors.green.shade700 : const Color(0xFFFF8C00),
@@ -91,7 +92,7 @@ class HomePage extends ConsumerWidget {
                               ],
                               const SizedBox(height: 2),
                               Text(
-                                device.isConnected
+                                activeDriver.deviceType == HardwareDeviceType.appleWatch ? (device.isConnected ? '手表App当前可达；录音请在手表操作' : '在设置中开启接收，并安装和打开手表App') : device.isConnected
                                     ? (activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
                                         ? "原生麦克风就绪 (无外设模式)"
                                         : devNotifier.connectionSummary)
@@ -108,9 +109,9 @@ class HomePage extends ConsumerWidget {
                     ),
                     TextButton.icon(
                       icon: const Icon(Icons.receipt_long, size: 18),
-                      label: const Text('录音卡设置与诊断'),
+                      label: Text(activeDriver.deviceType == HardwareDeviceType.appleWatch ? '手表录音与健康只读' : '录音卡设置与诊断'),
                       onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                        builder: (pageContext) => RecorderManagementPage(
+                        builder: (pageContext) => activeDriver.deviceType == HardwareDeviceType.appleWatch ? const AppleWatchPage() : RecorderManagementPage(
                           onOpenConnection: () => showBleDevicePickerModal(pageContext, ref),
                           onOpenDiagnostics: () => showModalBottomSheet<void>(
                             context: pageContext, isScrollControlled: true,
@@ -132,7 +133,7 @@ class HomePage extends ConsumerWidget {
                         _StatusIndicator(
                           icon: Icons.battery_charging_full,
                           label: "电量",
-                          value: device.isConnected
+                          value: activeDriver.deviceType == HardwareDeviceType.appleWatch ? '未提供' : device.isConnected
                               ? (device.batteryLevel > 0 ? "${device.batteryLevel}%" : "读取中...")
                               : "--",
                           color: device.isConnected
@@ -144,7 +145,7 @@ class HomePage extends ConsumerWidget {
                         _StatusIndicator(
                           icon: Icons.fiber_manual_record,
                           label: "状态",
-                          value: device.isConnected
+                          value: activeDriver.deviceType == HardwareDeviceType.appleWatch ? '手表端操作' : device.isConnected
                               ? (device.isRecording
                                   ? "采集中"
                                   : (device.isPaused ? "已暂停" : "待命"))
@@ -156,7 +157,7 @@ class HomePage extends ConsumerWidget {
                         _StatusIndicator(
                           icon: Icons.graphic_eq,
                           label: "驱动源",
-                          value: activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
+                          value: activeDriver.deviceType == HardwareDeviceType.appleWatch ? 'Apple Watch' : activeDriver.deviceType == HardwareDeviceType.phoneInternalMic
                               ? "手机麦克风"
                               : "6095 蓝牙卡",
                           color: const Color(0xFFFF8C00),
@@ -165,7 +166,9 @@ class HomePage extends ConsumerWidget {
                     ),
                     const SizedBox(height: 18),
                     // 蓝牙硬件设备扫描与连接按钮
-                    if (!device.isConnected && !devNotifier.isBleLinkConnected && !devNotifier.isBleConnecting)
+                    if (activeDriver.deviceType == HardwareDeviceType.appleWatch)
+                      OutlinedButton.icon(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AppleWatchPage())), icon: const Icon(Icons.watch_outlined), label: const Text('查看手表连接与离线录音'))
+                    else if (!device.isConnected && !devNotifier.isBleLinkConnected && !devNotifier.isBleConnecting)
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton.icon(

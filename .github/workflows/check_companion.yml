@@ -1,0 +1,57 @@
+name: Check SunMate iPhone + Watch (Unsigned)
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  companion:
+    runs-on: xcode-27
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      WATCH_EXPECTED_XCODE: '27.2'
+      WATCH_SDK: watchos27.2
+      IPHONE_SDK: iphoneos27.2
+      FLUTTER_SUPPRESS_ANALYTICS: 'true'
+      COCOAPODS_DISABLE_STATS: 'true'
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check preinstalled SDKs and compile standalone Watch
+        shell: bash
+        run: |
+          bash .github/scripts/check_companion.sh preflight
+          bash .github/scripts/check_watchos.sh
+
+      # Flutter/dependency downloads are cloud-only; Xcode/SDKs must be preinstalled.
+      - name: Prepare fixed Flutter version on cloud runner
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.35.7'
+          cache: true
+
+      - name: Prepare companion configuration and run regressions
+        shell: bash
+        run: bash .github/scripts/check_companion.sh prepare
+
+      - name: Compile and verify unsigned iPhone and embedded Watch
+        shell: bash
+        run: bash .github/scripts/check_companion.sh build
+
+      - name: Retain text logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-compile-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/sunmate-watch-compile-logs/*.log
+            ${{ runner.temp }}/sunmate-companion-compile-logs/*.log
+          if-no-files-found: warn
+          retention-days: 7

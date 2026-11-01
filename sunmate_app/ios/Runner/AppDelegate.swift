@@ -6,6 +6,7 @@ import Flutter
   private var recorderLocalAudio: RecorderLocalAudioChannel?
   private var recorderBackground: RecorderBackgroundChannel?
   private var backgroundTransfer: RecorderBackgroundTransfer?
+  private var appleWatch: AppleWatchChannel?
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -15,6 +16,7 @@ import Flutter
       recorderLocalAudio = RecorderLocalAudioChannel(messenger: registrar.messenger())
       do {
         let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        appleWatch = try? AppleWatchChannel(messenger: registrar.messenger(), root: root)
         let transfer = try RecorderBackgroundTransfer(root: root)
         backgroundTransfer = transfer
         recorderBackground = RecorderBackgroundChannel(messenger: registrar.messenger(), receiver: try RecorderBackgroundReceiver(transfer: transfer))

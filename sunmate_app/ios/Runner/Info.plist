@@ -64,6 +64,8 @@
 	<!-- 麦克风权限说明 (手机备用拾音) -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>SunMate 需要麦克风权限以提供本地高品质语音录音与即按即说对讲</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>仅在你开启健康只读后，读取所选心率、HRV、步数或睡眠并在本机展示；不发送给 ASR、Hermes 或其他服务器。</string>
 
 	<!-- 本地局域网通信权限 (自建 MOSS-ASR 与本地服务访问) -->
 	<key>NSLocalNetworkUsageDescription</key>
