@@ -800,5 +800,8 @@
 
 ## Watch 云端编译实跑（2026-11-01）
 
-- [进行中] 用户授权推送并跑通Watch无签名编译，推送前先将旧iPhone发布工作流改为仅workflow_dispatch，移除所有push/tag自动触发；仅推Watch原型/共享代码、编译工作流及相关记录，不夹带未发布的手机业务/UI改动或其它调查资料。
+- [已完成] 用户授权推送并跑通Watch无签名编译，推送前先将旧iPhone发布工作流改为仅workflow_dispatch，移除所有push/tag自动触发；仅推Watch原型/共享代码、编译工作流及相关记录，不夹带未发布的手机业务/UI改动或其它调查资料。
 - [边界] 只编译Watch和检查日志，不签名、不归档/IPA、不上传Apple，不下载本机大型工具；编译失败据真实日志定点修复。真实AES、旧密钥、HAL、私有端点和原录音保持原样。
+- [本地及推送] 7项工作流/退出码模拟回归、60项原生样本/落盘/回执断言、plist/pbxproj和diff检查通过；源提交ae3222c50058447fc57684cff589ed817ed6efc2已推main。仅手动触发Watch，无自动IPA；未改变App版本或手机业务代码。
+- [云端实证] Actions run41271687258成功（https://github.com/lrocky01/sunmate/actions/runs/41271687258），预装镜像macos27 20261026.0314.1、Xcode27.2/27B48、watchOS27.2 SDK；arm64与arm64_32真实编译及链接通过，BUILD SUCCEEDED和退出0，CODE_SIGNING_ALLOWED/REQUIRED=NO。9条非阻断诊断为并发捕获/旧录音授权API/无AppIntents元数据提示；保留待真机及后续原生完善，不假称零警告。
+- [验收] 同SHA只出现该手动Watch运行，未触发旧iPhone发布。artifact13069267423仅3份文字日志，23,168字节，SHA256=968a3e2f35d96f9985da56661c447e22e3b3698fffc4a632a42e9adafcea9680与GitHub一致，CRC通过。报告及日志在build_output/verification-watch-2026-11-01/。本机无大型工具下载，无签名/IPA/Apple上传/设备操作；完整手机伴侣SDK编译、嵌入/签名、安装及熄屏/耗电实测仍未完成。

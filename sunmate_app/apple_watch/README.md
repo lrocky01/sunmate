@@ -1,6 +1,6 @@
 # Apple Watch 本地原型
 
-2026-11-01：用户已确认语音三模式及健康只读，当前处于原型阶段，尚未完成 watchOS/iOS SDK 编译或真机验收。版本沿用 1.0.34+35，未打包、推送、部署。用户暂缓大型工具下载，不能为验证隐式下载 SDK 或 Flutter 引擎。
+2026-11-01：用户已确认语音三模式及健康只读，当前处于原型阶段。独立 Watch 目标已按授权推送并通过云端真实 watchOS SDK 编译；iPhone伴侣平台编译、嵌入/签名和真机验收尚未完成。版本沿用 1.0.34+35，未生成IPA、签名或部署。用户暂缓本机大型工具下载，不能为验证隐式下载 SDK 或 Flutter 引擎。
 
 ## 本轮实现
 
@@ -14,7 +14,7 @@
 
 ## 尚待完成，不能视为已可交付
 
-1. 用完整 Xcode 类型检查 watchOS/iOS 分支、配置 Watch 嵌入与签名。当前 Swift 语法解析及 macOS 核心测试不能替代该步骤。
+1. 完成iPhone原生分支的SDK编译、Watch嵌入与签名。独立Watch目标现已通过云端编译，但不能据此宣称完整伴侣安装包可交付。
 2. 真机验证 30/60 分钟熄屏、手机不在旁、系统中断、空间不足、强退恢复、样本完整性及耗电。原型通过后再铺开上层处理。
 3. 会议整场播放/逐字稿/纪要与随身时间线接入，手表回复回传，以及 Watch 音频原生后台上传和服务器版本适配。当前服务器 v1 的 Ogg/Opus 契约不接受 WAV，不可直接套入卡片 OPS 流程。
 4. 手表健康画面、后台健康更新和趋势仍待后续；不通过伪造运动会话维持录音或连续心率。
@@ -34,3 +34,9 @@
 - 编译产物只留在runner临时目录；GitHub artifact仅保存`check.log`、`build.log`及`status.log`文字日志，保留7天，编译失败也收集已有日志。`pipefail`保留真实编译退出码；成功不等于已完成手机嵌入、签名或真机验收。
 - 本地验证：`bash -n .github/scripts/check_watchos.sh`及`python3 .github/tests/test_watchos_check.py -v`。后者用临时模拟编译器检查成功、失败退出码、缺Xcode/版本不符/缺SDK拒绝、手动触发和仅日志保留；不访问Apple、不运行真实编译器、不下载组件。不能把该测试通过当成watchOS SDK编译通过。
 - `build_ios.yml`已按用户授权改为仅手动触发，main/master推送及标签均不再自动生成IPA。本次只手动运行Watch检查，不启动iPhone发布工作流；后续iPhone发布仍需单独确认工具链迁移和打包。
+
+### 已验证的云端结果
+
+源提交`ae3222c50058447fc57684cff589ed817ed6efc2`、[Actions 41271687258](https://github.com/lrocky01/sunmate/actions/runs/41271687258)成功。实际Xcode27.2（27B48）、watchOS27.2 SDK，arm64/arm64_32均完成编译和链接；`BUILD SUCCEEDED`、退出0、签名关闭。日志有9条非阻断诊断：3处非Sendable对象捕获及旧录音权限API各按两种架构报告，加1条无AppIntents依赖的元数据提示。未为消除警告关闭编译检查，也未将其当成真机并发/熄屏行为已验证。
+
+artifact13069267423仅含`check.log`、`build.log`、`status.log`，ZIP CRC与GitHub SHA256摘要968a3e2f35d96f9985da56661c447e22e3b3698fffc4a632a42e9adafcea9680一致；没有IPA或可安装包。核对该源提交仅出现本次手动Watch运行，未触发旧iPhone发布工作流。本机验收报告位于忽略目录`build_output/verification-watch-2026-11-01/result.json`，不提交原始云端日志。
