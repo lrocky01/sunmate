@@ -808,6 +808,9 @@
 
 ## iPhone／Watch 伴侣工程整合（2026-11-01）
 
-- [进行中] 用户授权接续整合并跑通两端云端无签名编译。复用已有Watch原型、手机原生桥/默认关闭的接收与健康只读原型及HAL接入，不重构既有HAL/真实鉴权/密钥/私有端点；保持App版本，不生成IPA、不签名/上传Apple、不下载本机大型工具。
+- [已完成工程整合及云端编译验收] 用户授权接续整合并跑通两端云端无签名编译。复用已有Watch原型、手机原生桥/默认关闭的接收与健康只读原型及HAL接入，不重构既有HAL/真实鉴权/密钥/私有端点；保持App版本，不生成IPA、不签名/上传Apple、不下载本机大型工具。
 - [工程] Runner增加跨项目Watch目标依赖和标准Embed Watch Content，workspace纳入Watch项目；Watch版本改用构建变量并与手机核对，Runner残留13目标统一为Podfile既有15。新增仅手动的双端检查，预装Xcode/两端SDK预检，固定Flutter3.35.7及锁定依赖仅云端准备；真实编译后检查嵌入目录、SDK、两端标识/版本/架构及无签名/profile，仅保留文字日志。
 - [首次云端定位] f701163已推，run41279913114独立Watch及Flutter分析/回归/配置通过，两端原生源码完成编译到手机链接阶段后，因Embed Watch排在Flutter Thin Binary之后形成Info.plist/复制依赖环，退出65；不是业务鉴权或服务连接问题。将Watch嵌入移到Thin Binary之前，并补工程图顺序回归，不跳过嵌入或禁用构建校验。
+- [最终通过] 修复源提交943a6cd27dee1a195b7e5e2977404bd794b35104已推main；手动Actions run41280552914成功（https://github.com/lrocky01/sunmate/actions/runs/41280552914）。Xcode27.2/27B48，实际手机SDK27.2/arm64和WatchSDK27.2/arm64+arm64_32；Runner.app内Watch/SunMateWatch.app真实存在，标识关联、版本1.0.34/35、两端SDK及无根目录签名/profile校验通过，手机原生桥和共享协议实际参与iPhone编译。
+- [验证与日志] 本地Flutter693项通过；云端692通过/1环境跳过；分析无error/warning、11条info；旧工作流7项+伴侣6项结构/失败分支回归通过。原生最终编译有77条非阻断诊断行，包含第三方弃用/指针警告及Watch并发捕获/旧录音权限提示，保留不屏蔽。artifact13072319662只有7份文字日志、148555字节，CRC及SHA256=360fe33f8fba16989dd904e3a574e76cbd08caa0b078e604476bc83b28960ef5与GitHub匹配；报告build_output/verification-companion-2026-11-01/result.json。
+- [边界] 无IPA/签名/Apple上传/本机大工具下载/设备操作；既有BLE鉴权与密钥库、服务配置/ASR/AgentClient、vendor、依赖锁、Hermes包源码与基线无差异。伴侣接入沿用HAL接口及旧驱动，新开关默认关闭，不删除录音。实际签名/安装、健康授权、30/60分钟熄屏/离线/后台同步及续航仍需后续实机验收。
