@@ -1,0 +1,39 @@
+name: Check SunMate watchOS (Unsigned)
+
+# Compile gate only. No push/PR trigger, signing, archive, IPA or Apple upload.
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watchos:
+    name: Compile native Watch target with preinstalled Xcode 27.2
+    runs-on: xcode-27
+    timeout-minutes: 20
+    env:
+      # This alias currently points to the preinstalled 27.2 RC. Never fall back
+      # to the image's default Xcode or download a missing toolchain/platform.
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      WATCH_EXPECTED_XCODE: '27.2'
+      WATCH_SDK: watchos27.2
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Compile Watch target and retain compiler exit status
+        shell: bash
+        run: bash .github/scripts/check_watchos.sh
+
+      - name: Retain text logs, including failed checks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchos-compile-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sunmate-watch-compile-logs/*.log
+          if-no-files-found: warn
+          retention-days: 7

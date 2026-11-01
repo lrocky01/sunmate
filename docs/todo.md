@@ -766,3 +766,39 @@
 - [IPA交付] build_output/SunMate-1.0.34+35.ipa，未签名，10,529,121字节；SHA256=b5e934caded619d866241893e930e71051e9f28d1c231ee1c52522e8d0008ca8。CRC、版本/包ID、首页诊断、后台原生收段/上传/封装、同BLE交接、真实身份挑战、旧密钥保护及本地播放组件核对通过。验证元数据build_output/verification-1.0.34/delivery.json。
 - [Hermes交付] build_output/hermes-release/sunmate-hermes-2.3.0.zip，91,245字节，SHA256=446755188734ffb74e338d560aaca2dc56849650cce549900ab2e4f960fe8533；tar.gz为60,488字节，SHA256=3356532733578c1ea59f9f91dce8ce05b735a2844e54f3b4746382681137580a；配套SHA256SUMS-2.3.0。清单25项核对通过，旧IPA和安装包未变。
 - [安装与实测边界] docs/RELEASE_1.0.34_BACKGROUND_INSTALL.md提供覆盖安装、旧插件保留升级、原profile配置合并、私有ASR/Token文件/ffmpeg及两种用途验收步骤。新开关默认关闭；未部署真实服务器，未用真实录音/通知或真实模型验收。锁屏/强退/重连需安装后实测；新增音频读写与原有本地播放均需iOS13.4+，App最低部署目标未变。服务器已收妥任务可独立继续，App回前台取回结果，无APNs常驻承诺；不解绑、不重新协商、不删除原录音。
+
+## Apple Watch 迁移及健康能力方案（2026-11-01）
+
+- 目标：针对用户的Series10 GPS/watchOS27.2，列出短对讲、会议、主动随身记录、熄屏/离线/后台同步、消息替代来源和健康能力方案；保留HAL、旧资料及私有ASR/Hermes端点。
+- [已完成，实施待确认] 只读核对现有HAL、Ogg/Opus后台协议、ASR接口及苹果公开文档，方案见docs/APPLE_WATCH_PLAN_2026-11-01.md。本轮仅保存文档和追加本记录，不改运行代码/版本/CI，不打包、推送、部署或操作真实设备/凭据。
+- 记录：SwiftUI手表App+原生WatchConnectivity持久文件接收/后台上传，Flutter继续复用业务；会议整场、随身按段。先做熄屏/离线/中断原型，格式不能假装兼容旧OggS协议，需明确版本适配并保留旧调用。GPS版离线能录、联网才处理；手表Wi-Fi不等于自动继承手机VPN。
+- 健康：先通过HealthKit按项只读已有心率、SDNN HRV、睡眠/活动，本机展示且默认关闭；不伪造运动或承诺持续心率。压力是待验证推断，首期不输出实测压力分；外发/Hermes身心复盘独立授权，健康不默认混入普通会议资料。
+- 消息与边界：标准Watch App不可读其它App通知，替代为主动分享及授权业务接口；新配件通知框架有欧盟地区/账号等条件，不作通用Watch解法。已核对watchOS27.2官方发布；当前本机CLT及旧CI不能当作可编译新Watch目标的证明，后续需核对iPhone/iOS、签名和匹配SDK。
+
+## Apple Watch 首期实施（2026-11-01）
+
+- [进行中] 用户已确认“语音三模式＋健康只读”。先工具/连接检查、原生离线录音和文件协议原型、本地回归；保留HAL、私有端点、旧资料/密钥，新开关默认关闭，不做压力评分/健康外发，不打包、推送或部署。
+- [工具检查] 当前xcode-select为CommandLineTools，/Applications未发现Xcode，xcodebuild/devicectl不可用；usbmuxd只见1个Network连接，尚未确认USB iPhone及配对手表可调试。已向用户询问iPhone/iOS、接线及完整Xcode位置；不自行安装/升级Xcode或更改签名。
+- [执行边界] 按原方案先原型再扩展；缺完整SDK时继续可移植状态机/存储/格式、HAL及只读健康桥的源码与本机合成回归，不把macOS通过当watchOS编译/熄屏实测通过。使用工程固定Flutter3.35.7及隔离Python测试环境，不改项目依赖。
+- [用户新约束] 用户要求暂不下载大量编译软件，待其调整网络。停止新增工具/SDK下载，不装Xcode、不执行Flutter预缓存或可能隐式拉取平台引擎的命令。固定Flutter恢复过程此前已下载约206MB Dart SDK；后续仅使用本机现有工具。USB已识别单台iPhone，ProductVersion=27.2；只读取了产品类型/系统版本，不读取个人数据或凭据；不能以此替代完整开发配对/手表调试验证。
+- [原型源码已落地] 独立 SwiftUI Watch 目标、三用途 PCM/WAV 闭段/封尾/中断恢复、WatchConnectivity 不可变文件及落盘回执、iPhone 校验接收/逐段播放/显式短语音交给原 ASR/Hermes，HAL 新增 Watch 驱动。健康按项只读，本机视图，不评分或外发；开关默认关闭。原型保留 PCM 和 WAV、占用较大，尚不是全天续航方案。实现边界见 sunmate_app/apple_watch/README.md。
+- [本地核心检查] Swift 原生存储 60 项合成断言通过，覆盖三用途、实际 CoreAudio WAV 解码、无丢样本/重复样本、乱序/缺段、SHA、持久回执及异常恢复。Swift 平台分支仅语法解析通过，工程/Info/entitlements 的 plutil 通过；不能当作 watchOS/iOS SDK 编译结果。
+- [待验证，工具暂缓] 完整 Xcode/watchOS 编译、Watch 嵌入/签名、30/60 分钟真机熄屏/离线/续航尚未完成。会议整场与随身页面接入、Watch 音频服务器格式适配/后台上传和回复回手表留在原型真机门槛之后。原私有端点、旧鉴权/密钥、历史资料、版本及 CI 不变，未打包/推送。原 iPhone IPA 使用 GitHub Actions Mac 编译；可后续单独核对 Watch 云端构建环境，不要求现在下载。
+- [本轮本地收尾完成，SDK及真机暂缓] 网络下载地址设为不可用回环，仅使用已有缓存，全量 Flutter 693 项通过（新增 Watch 模型/默认关闭/健康撤回/界面及原生核心回归）；设置页面增加入口导致原有测试滚动未结束即点击，补等待滚动动画后全量通过。分析退出0，无error/warning，11条弃用info（其中新Radio沿用既有写法产生2条）；新增 Watch 页 scoped 检测无主问题，diff检查通过。日志 /private/tmp/sunmate-watch-all-tests-final.log、sunmate-watch-analyze-final.log。未进行完整平台编译或手表视觉/真机验收；不再下载大型工具，源码保留待续。
+
+## Apple Watch 云端 SDK／签名／安装方案（2026-11-01）
+
+- [已完成，只读调查及方案] 用户为普通Apple账号／免费自签；方案补充到 docs/APPLE_WATCH_PLAN_2026-11-01.md。GitHub xcode-27镜像已GA，清单有默认27.1与27.2 RC及对应SDK；旧macos-14于2026-11-02退役。镜像文档不等于已在本仓库成功运行。
+- [建议顺序] 先未来手动触发的无签名Watch SDK编译检查（无IPA/不上传），再整合伴侣嵌入；免费真机路线待网络方便后用本机Xcode Personal Team，7天期限。当前Sideloadly发布说明尚未提供免费账号Watch支持，爱思旧教程不能证明Watch交付可行；付费TestFlight/Ad Hoc仅列可选项。HealthKit并非一概要求付费，需签名权限及用户读取授权分别验证。
+- [本轮边界] 仅更新既有方案和todo，未改运行代码、版本、CI/鉴权/密钥/端点；未下载大型工具、触发Actions、打包、推送、配置真实签名或操作手机。未来需核对既有签名身份/钥匙串保护，不能以换Team/删旧App方式冒险丢资料。SDK编译与熄屏/同步/耗电实测仍待授权执行。
+
+## Watch 无签名编译工作流（2026-11-01）
+
+- [已完成本地实现和检查，未推送/运行] 用户授权补齐编译门槛。新增独立手动 check_watchos.yml，使用xcode-27及明确预装Xcode27.2路径、watchos27.2；实际版本/SDK目录不符即失败，不下载或回退。仅原型Watch Debug build，禁用签名、无证书/profile/Apple上传、无归档/IPA；GitHub仅收集文字日志及真实退出码，保留7天。
+- [验证] bash语法、系统Ruby YAML解析、6项离线模拟编译器/工作流回归通过，覆盖tee不吞65退出码、缺Xcode/版本错/缺SDK阻止build、只手动触发及只收文字日志；git diff检查通过。未安装新检查工具，未执行真正watchOS SDK编译，不能据此宣称Watch可安装。
+- [范围] 本轮只新增workflow/脚本/本地回归并更新Watch README/todo。原iPhone发布工作流、应用代码/版本/依赖、真实AES及密钥、HAL和私有端点保持本轮开始时状态。未来工作流需进默认分支才可手动运行；旧main push仍会触发IPA发布，若后续仍要求不打包，须单独处理触发范围后才可推送。本轮未提交、推送、触发Actions或操作设备。
+
+## Watch 云端编译实跑（2026-11-01）
+
+- [进行中] 用户授权推送并跑通Watch无签名编译，推送前先将旧iPhone发布工作流改为仅workflow_dispatch，移除所有push/tag自动触发；仅推Watch原型/共享代码、编译工作流及相关记录，不夹带未发布的手机业务/UI改动或其它调查资料。
+- [边界] 只编译Watch和检查日志，不签名、不归档/IPA、不上传Apple，不下载本机大型工具；编译失败据真实日志定点修复。真实AES、旧密钥、HAL、私有端点和原录音保持原样。

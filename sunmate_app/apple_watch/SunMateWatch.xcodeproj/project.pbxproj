@@ -1,0 +1,177 @@
+// !$*UTF8*$!
+{
+"archiveVersion" = "1";
+"classes" = {
+};
+"objectVersion" = "56";
+"objects" = {
+"A6110102000000000000000A" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "Shared/WatchRecordingStore.swift";
+"sourceTree" = "<group>";
+};
+"A6110102000000000000000B" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "A6110102000000000000000A";
+};
+"A6110102000000000000000C" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "Shared/WatchRecordingLink.swift";
+"sourceTree" = "<group>";
+};
+"A6110102000000000000000D" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "A6110102000000000000000C";
+};
+"A6110102000000000000000E" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "SunMateWatch/WatchRecorderModel.swift";
+"sourceTree" = "<group>";
+};
+"A6110102000000000000000F" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "A6110102000000000000000E";
+};
+"A61101020000000000000010" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "SunMateWatch/SunMateWatchApp.swift";
+"sourceTree" = "<group>";
+};
+"A61101020000000000000011" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "A61101020000000000000010";
+};
+"A61101020000000000000001" = {
+"isa" = "PBXProject";
+"attributes" = {
+"LastUpgradeCheck" = "1500";
+};
+"buildConfigurationList" = "A61101020000000000000002";
+"compatibilityVersion" = "Xcode 14.0";
+"developmentRegion" = "zh-Hans";
+"knownRegions" = ("en","zh-Hans");
+"mainGroup" = "A61101020000000000000003";
+"productRefGroup" = "A61101020000000000000004";
+"projectDirPath" = "";
+"projectRoot" = "";
+"targets" = ("A61101020000000000000005");
+};
+"A61101020000000000000003" = {
+"isa" = "PBXGroup";
+"children" = ("A6110102000000000000000A","A6110102000000000000000C","A6110102000000000000000E","A61101020000000000000010","A61101020000000000000004");
+"sourceTree" = "<group>";
+};
+"A61101020000000000000004" = {
+"isa" = "PBXGroup";
+"name" = "Products";
+"children" = ("A61101020000000000000006");
+"sourceTree" = "<group>";
+};
+"A61101020000000000000006" = {
+"isa" = "PBXFileReference";
+"explicitFileType" = "wrapper.application";
+"path" = "SunMateWatch.app";
+"sourceTree" = "BUILT_PRODUCTS_DIR";
+};
+"A61101020000000000000005" = {
+"isa" = "PBXNativeTarget";
+"buildConfigurationList" = "A61101020000000000000007";
+"buildPhases" = ("A61101020000000000000008","A61101020000000000000009");
+"buildRules" = ();
+"dependencies" = ();
+"name" = "SunMateWatch";
+"productName" = "SunMateWatch";
+"productReference" = "A61101020000000000000006";
+"productType" = "com.apple.product-type.application";
+};
+"A61101020000000000000008" = {
+"isa" = "PBXSourcesBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ("A6110102000000000000000B","A6110102000000000000000D","A6110102000000000000000F","A61101020000000000000011");
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"A61101020000000000000009" = {
+"isa" = "PBXFrameworksBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ();
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"A611010200000000000000C8" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Debug";
+"buildSettings" = {
+"SDKROOT" = "watchos";
+"SWIFT_VERSION" = "5.0";
+"WATCHOS_DEPLOYMENT_TARGET" = "10.0";
+"CLANG_ENABLE_MODULES" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+};
+};
+"A611010200000000000000C9" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Release";
+"buildSettings" = {
+"SDKROOT" = "watchos";
+"SWIFT_VERSION" = "5.0";
+"WATCHOS_DEPLOYMENT_TARGET" = "10.0";
+"CLANG_ENABLE_MODULES" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+};
+};
+"A61101020000000000000002" = {
+"isa" = "XCConfigurationList";
+"buildConfigurations" = ("A611010200000000000000C8","A611010200000000000000C9");
+"defaultConfigurationIsVisible" = "0";
+"defaultConfigurationName" = "Release";
+};
+"A611010200000000000002BC" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Debug";
+"buildSettings" = {
+"SDKROOT" = "watchos";
+"SWIFT_VERSION" = "5.0";
+"WATCHOS_DEPLOYMENT_TARGET" = "10.0";
+"CLANG_ENABLE_MODULES" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.sunmate.app.watchkitapp";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"INFOPLIST_FILE" = "SunMateWatch/Info.plist";
+"CODE_SIGN_STYLE" = "Automatic";
+"SUPPORTED_PLATFORMS" = "watchos watchsimulator";
+"TARGETED_DEVICE_FAMILY" = "4";
+"SWIFT_EMIT_LOC_STRINGS" = "YES";
+"GENERATE_INFOPLIST_FILE" = "NO";
+};
+};
+"A611010200000000000002BD" = {
+"isa" = "XCBuildConfiguration";
+"name" = "Release";
+"buildSettings" = {
+"SDKROOT" = "watchos";
+"SWIFT_VERSION" = "5.0";
+"WATCHOS_DEPLOYMENT_TARGET" = "10.0";
+"CLANG_ENABLE_MODULES" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.sunmate.app.watchkitapp";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"INFOPLIST_FILE" = "SunMateWatch/Info.plist";
+"CODE_SIGN_STYLE" = "Automatic";
+"SUPPORTED_PLATFORMS" = "watchos watchsimulator";
+"TARGETED_DEVICE_FAMILY" = "4";
+"SWIFT_EMIT_LOC_STRINGS" = "YES";
+"GENERATE_INFOPLIST_FILE" = "NO";
+};
+};
+"A61101020000000000000007" = {
+"isa" = "XCConfigurationList";
+"buildConfigurations" = ("A611010200000000000002BC","A611010200000000000002BD");
+"defaultConfigurationIsVisible" = "0";
+"defaultConfigurationName" = "Release";
+};
+};
+"rootObject" = "A61101020000000000000001";
+}
